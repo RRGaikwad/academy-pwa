@@ -4,6 +4,7 @@ import {
   mockStudents, mockTeachers, adminUser, mockBatches, mockAttendance,
   mockExams, mockExamResults, mockFeePayments, mockAnnouncements, mockStudyMaterials
 } from '../data/mockData';
+import { supabase } from '../lib/supabase';
 
 const STORAGE_KEYS = {
   USER: 'ams_user',
@@ -37,7 +38,7 @@ interface AppContextType {
   setAnnouncements: React.Dispatch<React.SetStateAction<Announcement[]>>;
   studyMaterials: StudyMaterial[];
   setStudyMaterials: React.Dispatch<React.SetStateAction<StudyMaterial[]>>;
-  login: (email: string, password: string) => boolean;
+  login: (email: string, password: string) => Promise<boolean>;
   logout: () => void;
   activeTab: string;
   setActiveTab: (tab: string) => void;
@@ -118,25 +119,72 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     localStorage.setItem(STORAGE_KEYS.ATTENDANCE, JSON.stringify(attendance));
   }, [attendance]);
 
-  const login = useCallback((email: string, password: string): boolean => {
+  // Supabase Data Fetching Example for Exams
+  useEffect(() => {
+    const fetchExams = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('exams')
+          .select('*')
+          .order('scheduled_at', { ascending: false });
+        
+        if (error) throw error;
+        if (data) setExams(data);
+      } catch (err) {
+        console.error('Error fetching exams:', err);
+      }
+    };
+
+    if (currentUser) {
+      fetchExams();
+    }
+  }, [currentUser]);
+
+  const login = useCallback(async (email: string, password: string): Promise<boolean> => {
+    // Maintain Admin login logic for now
     if (email === adminUser.email && password === adminUser.password) {
       setCurrentUser(adminUser);
       setActiveTab('dashboard');
       return true;
     }
-    const teacher = teachers.find(t => t.email === email && t.password === password);
-    if (teacher) {
-      setCurrentUser(teacher);
+
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+      
+      if (error) throw error;
+
+      // Fetch user profile role from 'profiles' table
+      const { data: profile, error: profileError } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', data.user.id)
+        .single();
+
+      if (profileError) throw profileError;
+
+      setCurrentUser(profile);
       setActiveTab('dashboard');
       return true;
+    } catch (err) {
+      console.error('Login error:', err);
+      // Fallback to local check if Supabase fails or is not yet set up
+      const teacher = teachers.find(t => t.email === email && t.password === password);
+      if (teacher) {
+        setCurrentUser(teacher);
+        setActiveTab('dashboard');
+        return true;
+      }
+      const student = students.find(s => s.email === email && s.password === password);
+      if (student) {
+        setCurrentUser(student);
+        setActiveTab('dashboard');
+        return true;
+      }
+      return false;
     }
-    const student = students.find(s => s.email === email && s.password === password);
-    if (student) {
-      setCurrentUser(student);
-      setActiveTab('dashboard');
-      return true;
-    }
-    return false;
   }, [students, teachers]);
 
   const logout = useCallback(() => {
@@ -144,6 +192,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setActiveTab('dashboard');
     localStorage.removeItem(STORAGE_KEYS.USER);
     localStorage.removeItem(STORAGE_KEYS.ACTIVE_TAB);
+    supabase.auth.signOut(); // Sign out from Supabase
     // Add clear storage option for developers or full reset
     const clearAllData = () => {
       Object.values(STORAGE_KEYS).forEach(key => localStorage.removeItem(key));

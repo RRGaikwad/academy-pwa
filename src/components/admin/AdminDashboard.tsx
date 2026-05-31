@@ -9,9 +9,6 @@ import {
 import { performanceTrend, batchPerformance } from '../../data/mockData';
 import { Badge } from '../shared/Badge';
 import { format } from 'date-fns';
-
-
-
 import { PageHeader } from '../shared/PageHeader';
 
 export const AdminDashboard: React.FC = () => {

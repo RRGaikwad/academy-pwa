@@ -29,12 +29,16 @@ export const Login: React.FC = () => {
     e.preventDefault();
     setLoading(true);
     setError('');
-    await new Promise(r => setTimeout(r, 600));
-    const success = login(email, password);
-    if (!success) {
-      setError('Invalid email or password. Please try demo credentials below.');
+    try {
+      const success = await login(email, password);
+      if (!success) {
+        setError('Invalid email or password. Please try demo credentials below.');
+      }
+    } catch (err) {
+      setError('Login failed. Please check your connection or credentials.');
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   return (
