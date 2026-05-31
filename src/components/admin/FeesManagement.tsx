@@ -6,7 +6,7 @@ import { StatCard } from '../shared/StatCard';
 import { PageHeader } from '../shared/PageHeader';
 import { IndianRupee, Search, Plus, AlertCircle, CheckCircle2, TrendingUp } from 'lucide-react';
 import { FeePayment } from '../../types';
-import { format, startOfMonth, subMonths, isSameMonth } from 'date-fns';
+import { format, subMonths, isSameMonth } from 'date-fns';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { supabase } from '../../lib/supabase';
 
