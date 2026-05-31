@@ -4,6 +4,7 @@ import { Student, Category, Stream } from '../../types';
 import { Badge } from '../shared/Badge';
 import { Modal } from '../shared/Modal';
 import { PageHeader } from '../shared/PageHeader';
+import { supabase } from '../../lib/supabase';
 import {
   Plus, Search, Edit2, Trash2, Eye,
   GraduationCap, ChevronDown
@@ -47,7 +48,7 @@ export const StudentManagement: React.FC = () => {
     setEditStudent({ 
       ...defaultStudent, 
       studentId: newId, 
-      id: `s${Date.now()}`,
+      id: crypto.randomUUID(), // Use real UUID for Supabase
       email: generatedEmail,
       password: randomPass
     });
@@ -63,22 +64,32 @@ export const StudentManagement: React.FC = () => {
     setShowModal(true);
   };
 
-  const handleDelete = (id: string) => {
+  const handleDelete = async (id: string) => {
     if (confirm('Are you sure you want to delete this student?')) {
-      const studentToDelete = students.find(s => s.id === id);
-      setStudents(prev => prev.filter(s => s.id !== id));
-      
-      // Also remove student from batch
-      if (studentToDelete?.batchId) {
-        setBatches(prev => prev.map(b => b.id === studentToDelete.batchId ? {
-          ...b,
-          studentIds: b.studentIds.filter(sid => sid !== id)
-        } : b));
+      try {
+        const studentToDelete = students.find(s => s.id === id);
+        
+        // Delete from Supabase (profiles table will cascade if set up, but let's be safe)
+        const { error } = await supabase.from('profiles').delete().eq('id', id);
+        if (error) throw error;
+
+        setStudents(prev => prev.filter(s => s.id !== id));
+        
+        // Also remove student from batch
+        if (studentToDelete?.batchId) {
+          setBatches(prev => prev.map(b => b.id === studentToDelete.batchId ? {
+            ...b,
+            studentIds: b.studentIds.filter(sid => sid !== id)
+          } : b));
+        }
+      } catch (err) {
+        console.error('Error deleting student:', err);
+        alert('Failed to delete student from database.');
       }
     }
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!editStudent) return;
     const student = editStudent as Student;
 
@@ -95,33 +106,100 @@ export const StudentManagement: React.FC = () => {
     const batch = batches.find(b => b.category === student.category && b.stream === student.stream);
     if (batch) student.batchId = batch.id;
 
-    if (isEditing) {
-      const oldStudent = students.find(s => s.id === student.id);
-      setStudents(prev => prev.map(s => s.id === student.id ? student : s));
-      
-      // Update batches if batchId changed
-      if (oldStudent?.batchId !== student.batchId) {
-        setBatches(prev => prev.map(b => {
-          let newIds = [...b.studentIds];
-          if (b.id === oldStudent?.batchId) newIds = newIds.filter(id => id !== student.id);
-          if (b.id === student.batchId && !newIds.includes(student.id)) newIds.push(student.id);
-          return { ...b, studentIds: newIds };
-        }));
+    try {
+      if (isEditing) {
+        // 1. Update Profile (Base user info)
+        const { error: profileError } = await supabase
+          .from('profiles')
+          .update({
+            name: student.name,
+            email: student.email,
+            phone: student.phone,
+          })
+          .eq('id', student.id);
+
+        if (profileError) throw profileError;
+
+        // 2. Update Student Metadata
+        const { error: studentError } = await supabase
+          .from('students')
+          .upsert({
+            id: student.id,
+            student_id: student.studentId,
+            batch_id: student.batchId,
+            parent_name: student.parentName,
+            parent_phone: student.parentPhone,
+            category: student.category,
+            stream: student.stream,
+            attendance_percent: student.attendancePercent,
+            performance_score: student.performanceScore,
+            subjects: student.subjects,
+            admission_date: student.admissionDate,
+            total_fees: student.totalFees,
+            paid_fees: student.paidFees,
+            notes: student.notes,
+            password: student.password // Store password in metadata for now
+          });
+
+        if (studentError) throw studentError;
+
+        setStudents(prev => prev.map(s => s.id === student.id ? student : s));
+      } else {
+        // 1. Insert Profile
+        const { error: profileError } = await supabase
+          .from('profiles')
+          .insert({
+            id: student.id,
+            name: student.name,
+            email: student.email,
+            role: 'student',
+            phone: student.phone,
+          });
+
+        if (profileError) throw profileError;
+
+        // 2. Insert Student Metadata
+        const { error: studentError } = await supabase
+          .from('students')
+          .insert({
+            id: student.id,
+            student_id: student.studentId,
+            batch_id: student.batchId,
+            parent_name: student.parentName,
+            parent_phone: student.parentPhone,
+            category: student.category,
+            stream: student.stream,
+            attendance_percent: student.attendancePercent,
+            performance_score: student.performanceScore,
+            subjects: student.subjects,
+            admission_date: student.admissionDate,
+            total_fees: student.totalFees,
+            paid_fees: student.paidFees,
+            notes: student.notes,
+            password: student.password // Store password in metadata for now
+          });
+
+        if (studentError) throw studentError;
+
+        setStudents(prev => [...prev, { ...student, role: 'student' }]);
       }
-    } else {
-      setStudents(prev => [...prev, { ...student, role: 'student' }]);
-      
-      // Add student to the batch's studentIds array
+
+      // 3. Sync with Batch (Student IDs)
       if (student.batchId) {
-        setBatches(prev => prev.map(b => b.id === student.batchId ? {
-          ...b,
-          studentIds: [...b.studentIds, student.id]
-        } : b));
+        const targetBatch = batches.find(b => b.id === student.batchId);
+        if (targetBatch) {
+          const newIds = Array.from(new Set([...(targetBatch.studentIds || []), student.id]));
+          await supabase.from('batches').update({ student_ids: newIds }).eq('id', student.batchId);
+          setBatches(prev => prev.map(b => b.id === student.batchId ? { ...b, studentIds: newIds } : b));
+        }
       }
+      setShowModal(false);
+      setEditStudent(null);
+      setGeneratedCreds(null);
+    } catch (err) {
+      console.error('Error saving student:', err);
+      alert('Failed to save student to database. Check your console for details.');
     }
-    setShowModal(false);
-    setEditStudent(null);
-    setGeneratedCreds(null);
   };
 
   const getCategoryBadge = (cat: Category) => {

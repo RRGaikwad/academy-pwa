@@ -89,15 +89,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       setLoading(true);
       try {
+        // Parallel fetch for speed
         const [
-          { data: studentsData },
-          { data: teachersData },
-          { data: batchesData },
-          { data: announcementsData },
-          { data: examsData },
-          { data: attendanceData }
+          profilesRes,
+          studentsRes,
+          teachersRes,
+          batchesRes,
+          announcementsRes,
+          examsRes,
+          attendanceRes
         ] = await Promise.all([
-          supabase.from('students_view').select('*'),
+          supabase.from('profiles').select('*'),
+          supabase.from('students').select('*'),
           supabase.from('teachers').select('*'),
           supabase.from('batches').select('*'),
           supabase.from('announcements').select('*').order('created_at', { ascending: false }),
@@ -105,12 +108,96 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           supabase.from('attendance').select('*')
         ]);
 
-        if (studentsData) setStudents(studentsData);
-        if (teachersData) setTeachers(teachersData);
-        if (batchesData) setBatches(batchesData);
-        if (announcementsData) setAnnouncements(announcementsData);
-        if (examsData) setExams(examsData);
-        if (attendanceData) setAttendance(attendanceData);
+        const profiles = profilesRes.data || [];
+        
+        // 1. Format Students
+        if (studentsRes.data) {
+          const formatted: Student[] = studentsRes.data.map(s => {
+            const p = profiles.find(prof => prof.id === s.id) || {};
+            return {
+              ...s,
+              name: p.name || 'Unknown',
+              email: p.email || '',
+              phone: p.phone || '',
+              role: 'student',
+              studentId: s.student_id,
+              batchId: s.batch_id,
+              parentName: s.parent_name,
+              parentPhone: s.parent_phone,
+              attendancePercent: Number(s.attendance_percent) || 0,
+              performanceScore: Number(s.performance_score) || 0,
+              subjects: s.subjects || [],
+              admissionDate: s.admission_date || '',
+              totalFees: Number(s.total_fees) || 0,
+              paidFees: Number(s.paid_fees) || 0,
+              notes: s.notes || '',
+              password: s.password || ''
+            };
+          });
+          setStudents(formatted);
+        }
+
+        // 2. Format Teachers
+        if (teachersRes.data) {
+          const formatted: Teacher[] = teachersRes.data.map(t => {
+            const p = profiles.find(prof => prof.id === t.id) || {};
+            return {
+              ...t,
+              name: p.name || 'Unknown',
+              email: p.email || '',
+              phone: p.phone || '',
+              role: 'teacher',
+              teacherId: t.teacher_id,
+              assignedCategories: t.assigned_categories || [],
+              permissions: t.permissions || [],
+              password: t.password || ''
+            };
+          });
+          setTeachers(formatted);
+        }
+
+        // 3. Format Batches
+        if (batchesRes.data) {
+          setBatches(batchesRes.data.map(b => ({
+            ...b,
+            studentIds: b.student_ids || [],
+            teacherIds: b.teacher_ids || []
+          })));
+        }
+
+        // 4. Format Announcements
+        if (announcementsRes.data) {
+          setAnnouncements(announcementsRes.data.map(a => ({
+            ...a,
+            authorId: a.author_id,
+            authorName: a.author_name,
+            targetRole: a.target_role,
+            targetBatch: a.target_batch,
+            createdAt: a.created_at,
+            referenceId: a.reference_id
+          })));
+        }
+
+        // 5. Format Exams
+        if (examsRes.data) {
+          setExams(examsRes.data.map(e => ({
+            ...e,
+            teacherId: e.teacher_id,
+            batchId: e.batch_id,
+            scheduledAt: e.scheduled_at,
+            chapterTags: e.chapter_tags || [],
+            hasNegativeMarking: e.has_negative_marking
+          })));
+        }
+
+        // 6. Format Attendance
+        if (attendanceRes.data) {
+          setAttendance(attendanceRes.data.map(at => ({
+            ...at,
+            batchId: at.batch_id,
+            teacherId: at.teacher_id
+          })));
+        }
 
       } catch (err) {
         console.error('Error fetching data from Supabase:', err);
@@ -121,26 +208,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     fetchData();
 
-    // Real-time Subscriptions for cross-device sync
-    const announcementsChannel = supabase
-      .channel('public:announcements')
-      .on('postgres_changes', { event: '*', table: 'announcements', schema: 'public' }, () => fetchData())
-      .subscribe();
-
-    const examsChannel = supabase
-      .channel('public:exams')
-      .on('postgres_changes', { event: '*', table: 'exams', schema: 'public' }, () => fetchData())
-      .subscribe();
-
-    const attendanceChannel = supabase
-      .channel('public:attendance')
-      .on('postgres_changes', { event: '*', table: 'attendance', schema: 'public' }, () => fetchData())
-      .subscribe();
+    // Subscribe to ALL relevant tables for total sync
+    const channels = [
+      'profiles', 'students', 'teachers', 'batches', 
+      'announcements', 'exams', 'attendance'
+    ].map(table => 
+      supabase.channel(`public:${table}`)
+        .on('postgres_changes', { event: '*', table, schema: 'public' }, () => fetchData())
+        .subscribe()
+    );
 
     return () => {
-      supabase.removeChannel(announcementsChannel);
-      supabase.removeChannel(examsChannel);
-      supabase.removeChannel(attendanceChannel);
+      channels.forEach(channel => supabase.removeChannel(channel));
     };
   }, [currentUser]);
 

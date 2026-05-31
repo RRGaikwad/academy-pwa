@@ -4,6 +4,7 @@ import { Teacher, SubjectName } from '../../types';
 import { Badge } from '../shared/Badge';
 import { Modal } from '../shared/Modal';
 import { PageHeader } from '../shared/PageHeader';
+import { supabase } from '../../lib/supabase';
 import { Plus, Edit2, Trash2, Eye, Search, Users } from 'lucide-react';
 
 const defaultTeacher: Omit<Teacher, 'id' | 'role'> = {
@@ -32,7 +33,11 @@ export const TeacherManagement: React.FC = () => {
 
   const handleAdd = () => {
     const newId = `TCH${String(teachers.length + 1).padStart(3, '0')}`;
-    setEditTeacher({ ...defaultTeacher, teacherId: newId, id: `t${Date.now()}` });
+    setEditTeacher({ 
+      ...defaultTeacher, 
+      teacherId: newId, 
+      id: crypto.randomUUID() // Use real UUID for Supabase
+    });
     setIsEditing(false);
     setShowModal(true);
   };
@@ -43,19 +48,87 @@ export const TeacherManagement: React.FC = () => {
     setShowModal(true);
   };
 
-  const handleDelete = (id: string) => {
-    if (confirm('Delete this teacher?')) setTeachers(prev => prev.filter(t => t.id !== id));
+  const handleDelete = async (id: string) => {
+    if (confirm('Delete this teacher?')) {
+      try {
+        const { error } = await supabase.from('profiles').delete().eq('id', id);
+        if (error) throw error;
+        setTeachers(prev => prev.filter(t => t.id !== id));
+      } catch (err) {
+        console.error('Error deleting teacher:', err);
+        alert('Failed to delete teacher.');
+      }
+    }
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!editTeacher) return;
     const teacher = editTeacher as Teacher;
-    if (isEditing) {
-      setTeachers(prev => prev.map(t => t.id === teacher.id ? teacher : t));
-    } else {
-      setTeachers(prev => [...prev, { ...teacher, role: 'teacher' }]);
+    
+    try {
+      if (isEditing) {
+        // 1. Update Profile
+        const { error: profileError } = await supabase
+          .from('profiles')
+          .update({
+            name: teacher.name,
+            email: teacher.email,
+            phone: teacher.phone,
+          })
+          .eq('id', teacher.id);
+        
+        if (profileError) throw profileError;
+
+        // 2. Update Teacher Metadata
+        const { error: teacherError } = await supabase
+          .from('teachers')
+          .upsert({
+            id: teacher.id,
+            teacher_id: teacher.teacherId,
+            subject: teacher.subject,
+            assigned_categories: teacher.assignedCategories,
+            permissions: teacher.permissions,
+            password: teacher.password // Store password in metadata for now
+          });
+
+        if (teacherError) throw teacherError;
+
+        setTeachers(prev => prev.map(t => t.id === teacher.id ? teacher : t));
+      } else {
+        // 1. Insert Profile
+        const { error: profileError } = await supabase
+          .from('profiles')
+          .insert({
+            id: teacher.id,
+            name: teacher.name,
+            email: teacher.email,
+            role: 'teacher',
+            phone: teacher.phone,
+          });
+        
+        if (profileError) throw profileError;
+
+        // 2. Insert Teacher Metadata
+        const { error: teacherError } = await supabase
+          .from('teachers')
+          .insert({
+            id: teacher.id,
+            teacher_id: teacher.teacherId,
+            subject: teacher.subject,
+            assigned_categories: teacher.assignedCategories,
+            permissions: teacher.permissions,
+            password: teacher.password // Store password in metadata for now
+          });
+
+        if (teacherError) throw teacherError;
+
+        setTeachers(prev => [...prev, { ...teacher, role: 'teacher' }]);
+      }
+      setShowModal(false);
+    } catch (err) {
+      console.error('Error saving teacher:', err);
+      alert('Failed to save teacher to database.');
     }
-    setShowModal(false);
   };
 
   const toggleCategory = (cat: string) => {
