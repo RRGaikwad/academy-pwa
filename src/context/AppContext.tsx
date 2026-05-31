@@ -218,7 +218,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       announcements, setAnnouncements,
       studyMaterials, setStudyMaterials,
       login, logout,
-      activeTab, setActiveTab
+      activeTab, setActiveTab,
+      loading
     }}>
       {children}
     </AppContext.Provider>
