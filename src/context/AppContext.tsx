@@ -119,25 +119,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     localStorage.setItem(STORAGE_KEYS.ATTENDANCE, JSON.stringify(attendance));
   }, [attendance]);
 
-  // Supabase Data Fetching Example for Exams
+  // Supabase Data Fetching
   useEffect(() => {
-    const fetchExams = async () => {
+    const fetchData = async () => {
+      if (!currentUser) return;
+
       try {
-        const { data, error } = await supabase
-          .from('exams')
-          .select('*')
-          .order('scheduled_at', { ascending: false });
-        
-        if (error) throw error;
-        if (data) setExams(data);
+        // Fetch Students
+        const { data: studentsData } = await supabase.from('students_view').select('*');
+        if (studentsData) setStudents(studentsData);
+
+        // Fetch Teachers
+        const { data: teachersData } = await supabase.from('teachers').select('*');
+        if (teachersData) setTeachers(teachersData);
+
+        // Fetch Batches
+        const { data: batchesData } = await supabase.from('batches').select('*');
+        if (batchesData) setBatches(batchesData);
+
+        // Fetch Announcements
+        const { data: announcementsData } = await supabase.from('announcements').select('*').order('created_at', { ascending: false });
+        if (announcementsData) setAnnouncements(announcementsData);
+
+        // Fetch Exams
+        const { data: examsData } = await supabase.from('exams').select('*').order('scheduled_at', { ascending: false });
+        if (examsData) setExams(examsData);
+
+        // Fetch Attendance
+        const { data: attendanceData } = await supabase.from('attendance').select('*');
+        if (attendanceData) setAttendance(attendanceData);
+
       } catch (err) {
-        console.error('Error fetching exams:', err);
+        console.error('Error fetching data from Supabase:', err);
       }
     };
 
-    if (currentUser) {
-      fetchExams();
-    }
+    fetchData();
   }, [currentUser]);
 
   const login = useCallback(async (email: string, password: string): Promise<boolean> => {
