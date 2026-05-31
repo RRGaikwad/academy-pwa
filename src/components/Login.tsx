@@ -17,7 +17,7 @@ export const Login: React.FC = () => {
     try {
       const success = await login(email, password);
       if (!success) {
-        setError('Invalid email or password. Please try demo credentials below.');
+        setError('Invalid email or password. Access is restricted to authorized accounts.');
       }
     } catch (err) {
       setError('Login failed. Please check your connection or credentials.');

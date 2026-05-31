@@ -1,9 +1,5 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import { User, Student, Teacher, Batch, AttendanceRecord, Exam, ExamResult, FeePayment, Announcement, StudyMaterial } from '../types';
-import {
-  mockStudents, mockTeachers, mockBatches, mockAttendance,
-  mockExams, mockExamResults, mockFeePayments, mockAnnouncements, mockStudyMaterials
-} from '../data/mockData';
 import { supabase } from '../lib/supabase';
 
 const STORAGE_KEYS = {
@@ -54,15 +50,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const savedUser = localStorage.getItem(STORAGE_KEYS.USER);
     return savedUser ? JSON.parse(savedUser) : null;
   });
-  const [students, setStudents] = useState<Student[]>(mockStudents);
-  const [teachers, setTeachers] = useState<Teacher[]>(mockTeachers);
-  const [batches, setBatches] = useState<Batch[]>(mockBatches);
-  const [attendance, setAttendance] = useState<AttendanceRecord[]>(mockAttendance);
-  const [exams, setExams] = useState<Exam[]>(mockExams);
-  const [examResults, setExamResults] = useState<ExamResult[]>(mockExamResults);
-  const [feePayments, setFeePayments] = useState<FeePayment[]>(mockFeePayments);
-  const [announcements, setAnnouncements] = useState<Announcement[]>(mockAnnouncements);
-  const [studyMaterials, setStudyMaterials] = useState<StudyMaterial[]>(mockStudyMaterials);
+  const [students, setStudents] = useState<Student[]>([]);
+  const [teachers, setTeachers] = useState<Teacher[]>([]);
+  const [batches, setBatches] = useState<Batch[]>([]);
+  const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
+  const [exams, setExams] = useState<Exam[]>([]);
+  const [examResults, setExamResults] = useState<ExamResult[]>([]);
+  const [feePayments, setFeePayments] = useState<FeePayment[]>([]);
+  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const [studyMaterials, setStudyMaterials] = useState<StudyMaterial[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState(() => {
     return localStorage.getItem(STORAGE_KEYS.ACTIVE_TAB) || 'dashboard';
@@ -265,23 +261,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return true;
     } catch (err) {
       console.error('Login error:', err);
-      
-      // Fallback for Teachers/Students if they exist in local mock (for development only)
-      const teacher = teachers.find(t => t.email === email && t.password === password);
-      if (teacher) {
-        setCurrentUser(teacher);
-        setActiveTab('dashboard');
-        return true;
-      }
-      const student = students.find(s => s.email === email && s.password === password);
-      if (student) {
-        setCurrentUser(student);
-        setActiveTab('dashboard');
-        return true;
-      }
       return false;
     }
-  }, [students, teachers]);
+  }, []);
 
   const logout = useCallback(() => {
     setCurrentUser(null);
