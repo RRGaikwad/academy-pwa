@@ -16,8 +16,12 @@ export const AdminDashboard: React.FC = () => {
 
   const totalRevenue = feePayments.reduce((s, p) => s + p.amount, 0);
   const totalFeesDue = students.reduce((s, st) => s + (st.totalFees - st.paidFees), 0);
-  const avgAttendance = Math.round(students.reduce((s, st) => s + st.attendancePercent, 0) / students.length);
-  const avgPerformance = Math.round(students.reduce((s, st) => s + st.performanceScore, 0) / students.length);
+  const avgAttendance = students.length > 0 
+    ? Math.round(students.reduce((s, st) => s + st.attendancePercent, 0) / students.length)
+    : 0;
+  const avgPerformance = students.length > 0
+    ? Math.round(students.reduce((s, st) => s + st.performanceScore, 0) / students.length)
+    : 0;
   const lowAttendance = students.filter(s => s.attendancePercent < 75).length;
   const upcomingExams = exams.filter(e => e.status === 'upcoming').length;
 
