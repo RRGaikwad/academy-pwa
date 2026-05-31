@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { BookOpen, Eye, EyeOff, Atom, FlaskConical, Calculator, Dna } from 'lucide-react';
+import { BookOpen, Eye, EyeOff, Atom, FlaskConical, Calculator, Dna, Users } from 'lucide-react';
 
 export const Login: React.FC = () => {
   const { login } = useApp();
@@ -9,19 +9,15 @@ export const Login: React.FC = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const [selectedRole, setSelectedRole] = useState<'admin' | 'teacher' | 'student' | null>(null);
 
   const demoCredentials = {
     admin: { email: 'admin@academy.com', password: 'admin123' },
-    teacher: { email: 'physics@academy.com', password: 'teacher123' },
-    student: { email: 'arjun@student.com', password: 'student123' },
   };
 
-  const handleDemoLogin = (role: 'admin' | 'teacher' | 'student') => {
+  const handleDemoLogin = (role: 'admin') => {
     const creds = demoCredentials[role];
     setEmail(creds.email);
     setPassword(creds.password);
-    setSelectedRole(role);
     setError('');
   };
 
@@ -126,25 +122,26 @@ export const Login: React.FC = () => {
             </button>
           </form>
 
-          {/* Demo credentials */}
-          <div className="mt-5 pt-5 border-t border-white/10">
-            <p className="text-white/40 text-xs text-center mb-3 uppercase tracking-wider font-medium">Demo Accounts</p>
-            <div className="grid grid-cols-3 gap-2">
-              {[
-                { role: 'admin' as const, label: '🔑 Admin', color: 'from-purple-500/20 to-purple-600/20 border-purple-500/30 hover:border-purple-400/50' },
-                { role: 'teacher' as const, label: '👨‍🏫 Teacher', color: 'from-blue-500/20 to-blue-600/20 border-blue-500/30 hover:border-blue-400/50' },
-                { role: 'student' as const, label: '🎓 Student', color: 'from-green-500/20 to-green-600/20 border-green-500/30 hover:border-green-400/50' },
-              ].map(({ role, label, color }) => (
-                <button
-                  key={role}
-                  onClick={() => handleDemoLogin(role)}
-                  className={`bg-gradient-to-br ${color} border rounded-xl p-2 text-white text-xs font-medium text-center transition-all hover:scale-105 ${selectedRole === role ? 'ring-2 ring-white/30' : ''}`}
-                >
-                  {label}
-                </button>
-              ))}
+          {/* Demo Login Shortcuts */}
+          <div className="mt-6 pt-6 border-t border-white/10">
+            <p className="text-blue-300 text-xs font-medium uppercase tracking-wider mb-3">Quick Demo Access</p>
+            <div className="grid grid-cols-1 gap-2">
+              <button
+                type="button"
+                onClick={() => handleDemoLogin('admin')}
+                className="flex items-center justify-between p-3 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all group"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-lg bg-orange-500/20 flex items-center justify-center text-orange-400 group-hover:scale-110 transition-transform">
+                    <Users size={16} />
+                  </div>
+                  <div className="text-left">
+                    <p className="text-white text-xs font-bold">Admin Portal</p>
+                    <p className="text-blue-300/60 text-[10px]">Full system control</p>
+                  </div>
+                </div>
+              </button>
             </div>
-            <p className="text-white/30 text-xs text-center mt-2">Click to auto-fill credentials</p>
           </div>
         </div>
 
