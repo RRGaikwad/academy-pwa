@@ -42,6 +42,7 @@ interface AppContextType {
   logout: () => void;
   activeTab: string;
   setActiveTab: (tab: string) => void;
+  loading: boolean;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -51,38 +52,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const savedUser = localStorage.getItem(STORAGE_KEYS.USER);
     return savedUser ? JSON.parse(savedUser) : null;
   });
-  const [students, setStudents] = useState<Student[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.STUDENTS);
-    return saved ? JSON.parse(saved) : mockStudents;
-  });
-  const [teachers, setTeachers] = useState<Teacher[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.TEACHERS);
-    return saved ? JSON.parse(saved) : mockTeachers;
-  });
-  const [batches, setBatches] = useState<Batch[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.BATCHES);
-    return saved ? JSON.parse(saved) : mockBatches;
-  });
-  const [attendance, setAttendance] = useState<AttendanceRecord[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEYS.ATTENDANCE);
-    return saved ? JSON.parse(saved) : mockAttendance;
-  });
-  const [exams, setExams] = useState<Exam[]>(() => {
-    const savedExams = localStorage.getItem(STORAGE_KEYS.EXAMS);
-    return savedExams ? JSON.parse(savedExams) : mockExams;
-  });
+  const [students, setStudents] = useState<Student[]>(mockStudents);
+  const [teachers, setTeachers] = useState<Teacher[]>(mockTeachers);
+  const [batches, setBatches] = useState<Batch[]>(mockBatches);
+  const [attendance, setAttendance] = useState<AttendanceRecord[]>(mockAttendance);
+  const [exams, setExams] = useState<Exam[]>(mockExams);
   const [examResults, setExamResults] = useState<ExamResult[]>(mockExamResults);
   const [feePayments, setFeePayments] = useState<FeePayment[]>(mockFeePayments);
-  const [announcements, setAnnouncements] = useState<Announcement[]>(() => {
-    const savedAnnouncements = localStorage.getItem(STORAGE_KEYS.ANNOUNCEMENTS);
-    return savedAnnouncements ? JSON.parse(savedAnnouncements) : mockAnnouncements;
-  });
+  const [announcements, setAnnouncements] = useState<Announcement[]>(mockAnnouncements);
   const [studyMaterials, setStudyMaterials] = useState<StudyMaterial[]>(mockStudyMaterials);
+  const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState(() => {
     return localStorage.getItem(STORAGE_KEYS.ACTIVE_TAB) || 'dashboard';
   });
 
-  // Sync state to localStorage
+  // Sync session only to localStorage
   useEffect(() => {
     if (currentUser) {
       localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(currentUser));
@@ -95,66 +79,69 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     localStorage.setItem(STORAGE_KEYS.ACTIVE_TAB, activeTab);
   }, [activeTab]);
 
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.EXAMS, JSON.stringify(exams));
-  }, [exams]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.ANNOUNCEMENTS, JSON.stringify(announcements));
-  }, [announcements]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.STUDENTS, JSON.stringify(students));
-  }, [students]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.TEACHERS, JSON.stringify(teachers));
-  }, [teachers]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.BATCHES, JSON.stringify(batches));
-  }, [batches]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.ATTENDANCE, JSON.stringify(attendance));
-  }, [attendance]);
-
-  // Supabase Data Fetching
+  // Supabase Data Fetching & Real-time Subscriptions
   useEffect(() => {
     const fetchData = async () => {
-      if (!currentUser) return;
+      if (!currentUser) {
+        setLoading(false);
+        return;
+      }
 
+      setLoading(true);
       try {
-        // Fetch Students
-        const { data: studentsData } = await supabase.from('students_view').select('*');
+        const [
+          { data: studentsData },
+          { data: teachersData },
+          { data: batchesData },
+          { data: announcementsData },
+          { data: examsData },
+          { data: attendanceData }
+        ] = await Promise.all([
+          supabase.from('students_view').select('*'),
+          supabase.from('teachers').select('*'),
+          supabase.from('batches').select('*'),
+          supabase.from('announcements').select('*').order('created_at', { ascending: false }),
+          supabase.from('exams').select('*').order('scheduled_at', { ascending: false }),
+          supabase.from('attendance').select('*')
+        ]);
+
         if (studentsData) setStudents(studentsData);
-
-        // Fetch Teachers
-        const { data: teachersData } = await supabase.from('teachers').select('*');
         if (teachersData) setTeachers(teachersData);
-
-        // Fetch Batches
-        const { data: batchesData } = await supabase.from('batches').select('*');
         if (batchesData) setBatches(batchesData);
-
-        // Fetch Announcements
-        const { data: announcementsData } = await supabase.from('announcements').select('*').order('created_at', { ascending: false });
         if (announcementsData) setAnnouncements(announcementsData);
-
-        // Fetch Exams
-        const { data: examsData } = await supabase.from('exams').select('*').order('scheduled_at', { ascending: false });
         if (examsData) setExams(examsData);
-
-        // Fetch Attendance
-        const { data: attendanceData } = await supabase.from('attendance').select('*');
         if (attendanceData) setAttendance(attendanceData);
 
       } catch (err) {
         console.error('Error fetching data from Supabase:', err);
+      } finally {
+        setLoading(false);
       }
     };
 
     fetchData();
+
+    // Real-time Subscriptions for cross-device sync
+    const announcementsChannel = supabase
+      .channel('public:announcements')
+      .on('postgres_changes', { event: '*', table: 'announcements', schema: 'public' }, () => fetchData())
+      .subscribe();
+
+    const examsChannel = supabase
+      .channel('public:exams')
+      .on('postgres_changes', { event: '*', table: 'exams', schema: 'public' }, () => fetchData())
+      .subscribe();
+
+    const attendanceChannel = supabase
+      .channel('public:attendance')
+      .on('postgres_changes', { event: '*', table: 'attendance', schema: 'public' }, () => fetchData())
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(announcementsChannel);
+      supabase.removeChannel(examsChannel);
+      supabase.removeChannel(attendanceChannel);
+    };
   }, [currentUser]);
 
   const login = useCallback(async (email: string, password: string): Promise<boolean> => {
