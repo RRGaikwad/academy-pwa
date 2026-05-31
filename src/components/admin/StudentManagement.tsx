@@ -196,9 +196,10 @@ export const StudentManagement: React.FC = () => {
       setShowModal(false);
       setEditStudent(null);
       setGeneratedCreds(null);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error saving student:', err);
-      alert('Failed to save student to database. Check your console for details.');
+      const errorMessage = err?.message || 'Unknown database error';
+      alert(`Failed to save student to database: ${errorMessage}`);
     }
   };
 

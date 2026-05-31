@@ -125,9 +125,10 @@ export const TeacherManagement: React.FC = () => {
         setTeachers(prev => [...prev, { ...teacher, role: 'teacher' }]);
       }
       setShowModal(false);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error saving teacher:', err);
-      alert('Failed to save teacher to database.');
+      const errorMessage = err?.message || 'Unknown database error';
+      alert(`Failed to save teacher to database: ${errorMessage}`);
     }
   };
 
