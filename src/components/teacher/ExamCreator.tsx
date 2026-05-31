@@ -22,7 +22,10 @@ export const ExamCreator: React.FC = () => {
   const { currentUser, batches, exams, setExams, examResults, setAnnouncements } = useApp();
   const teacher = currentUser;
 
-  const myBatches = batches.filter(b => b.teacherIds.includes(teacher.id));
+  const myBatches = batches.filter(b => 
+    b.teacherIds.includes(teacher.id) || 
+    (teacher.assignedCategories && teacher.assignedCategories.includes(b.name))
+  );
   const myExams = exams.filter(e => e.teacherId === teacher.id);
 
   const [showCreate, setShowCreate] = useState(false);

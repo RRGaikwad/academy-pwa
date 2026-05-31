@@ -11,7 +11,10 @@ export const TeacherDashboard: React.FC = () => {
   const { currentUser, students, batches, exams, examResults, attendance, announcements } = useApp();
 
   const teacher = currentUser;
-  const myBatches = batches.filter(b => b.teacherIds.includes(teacher.id));
+  const myBatches = batches.filter(b => 
+    b.teacherIds.includes(teacher.id) || 
+    (teacher.assignedCategories && teacher.assignedCategories.includes(b.name))
+  );
   const myStudentIds = myBatches.flatMap(b => b.studentIds);
   const myStudents = students.filter(s => myStudentIds.includes(s.id));
   const myExams = exams.filter(e => e.teacherId === teacher.id);

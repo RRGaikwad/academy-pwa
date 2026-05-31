@@ -10,7 +10,10 @@ export const TeacherStudentView: React.FC = () => {
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState<'name' | 'attendance' | 'score'>('name');
 
-  const myBatches = batches.filter(b => b.teacherIds.includes(teacher.id));
+  const myBatches = batches.filter(b => 
+    b.teacherIds.includes(teacher.id) || 
+    (teacher.assignedCategories && teacher.assignedCategories.includes(b.name))
+  );
   const myStudentIds = myBatches.flatMap(b => b.studentIds);
   const myStudents = students.filter(s => myStudentIds.includes(s.id));
 

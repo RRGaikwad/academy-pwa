@@ -10,7 +10,10 @@ export const AttendanceMarker: React.FC = () => {
   const { currentUser, batches, students, attendance, setAttendance } = useApp();
   const teacher = currentUser;
 
-  const myBatches = batches.filter(b => b.teacherIds.includes(teacher.id));
+  const myBatches = batches.filter(b => 
+    b.teacherIds.includes(teacher.id) || 
+    (teacher.assignedCategories && teacher.assignedCategories.includes(b.name))
+  );
   const [selectedBatch, setSelectedBatch] = useState(myBatches[0]?.id || '');
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [presentMap, setPresentMap] = useState<Record<string, boolean>>({});
