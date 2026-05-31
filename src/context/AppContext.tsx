@@ -47,6 +47,8 @@ interface AppContextType {
 
 const AppContext = createContext<AppContextType | null>(null);
 
+const MASTER_ADMIN_EMAIL = 'gaikwadrohan8005@gmail.com';
+
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<(User & any) | null>(() => {
     const savedUser = localStorage.getItem(STORAGE_KEYS.USER);
@@ -234,13 +236,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [currentUser]);
 
   const login = useCallback(async (email: string, password: string): Promise<boolean> => {
-    // Maintain Admin login logic for now
-    if (email === adminUser.email && password === adminUser.password) {
-      setCurrentUser(adminUser);
-      setActiveTab('dashboard');
-      return true;
-    }
-
     try {
       const { data, error } = await supabase.auth.signInWithPassword({
         email,
@@ -249,7 +244,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       
       if (error) throw error;
 
-      // Fetch user profile role from 'profiles' table
+      // 1. Fetch user profile
       const { data: profile, error: profileError } = await supabase
         .from('profiles')
         .select('*')
@@ -258,12 +253,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (profileError) throw profileError;
 
+      // 2. High Security Lock: Check if Admin role is actually the Master Email
+      if (profile.role === 'admin' && profile.email !== MASTER_ADMIN_EMAIL) {
+        await supabase.auth.signOut();
+        console.error('Unauthorized Admin Access Attempt blocked.');
+        return false;
+      }
+
       setCurrentUser(profile);
       setActiveTab('dashboard');
       return true;
     } catch (err) {
       console.error('Login error:', err);
-      // Fallback to local check if Supabase fails or is not yet set up
+      
+      // Fallback for Teachers/Students if they exist in local mock (for development only)
       const teacher = teachers.find(t => t.email === email && t.password === password);
       if (teacher) {
         setCurrentUser(teacher);

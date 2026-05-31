@@ -124,23 +124,12 @@ export const Login: React.FC = () => {
 
           {/* Demo Login Shortcuts */}
           <div className="mt-6 pt-6 border-t border-white/10">
-            <p className="text-blue-300 text-xs font-medium uppercase tracking-wider mb-3">Quick Demo Access</p>
-            <div className="grid grid-cols-1 gap-2">
-              <button
-                type="button"
-                onClick={() => handleDemoLogin('admin')}
-                className="flex items-center justify-between p-3 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all group"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-orange-500/20 flex items-center justify-center text-orange-400 group-hover:scale-110 transition-transform">
-                    <Users size={16} />
-                  </div>
-                  <div className="text-left">
-                    <p className="text-white text-xs font-bold">Admin Portal</p>
-                    <p className="text-blue-300/60 text-[10px]">Full system control</p>
-                  </div>
-                </div>
-              </button>
+            <p className="text-blue-300 text-xs font-medium uppercase tracking-wider mb-3">Institutional Access</p>
+            <div className="grid grid-cols-1 gap-2 text-center p-3 rounded-xl bg-white/5 border border-white/10">
+               <p className="text-white/60 text-[10px] leading-relaxed">
+                 Use your assigned unique credentials to access your dashboard. 
+                 Master Admin control is restricted to authorized personnel.
+               </p>
             </div>
           </div>
         </div>
