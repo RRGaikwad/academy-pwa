@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import { User, Student, Teacher, Batch, AttendanceRecord, Exam, ExamResult, FeePayment, Announcement, StudyMaterial } from '../types';
 import {
-  mockStudents, mockTeachers, adminUser, mockBatches, mockAttendance,
+  mockStudents, mockTeachers, mockBatches, mockAttendance,
   mockExams, mockExamResults, mockFeePayments, mockAnnouncements, mockStudyMaterials
 } from '../data/mockData';
 import { supabase } from '../lib/supabase';

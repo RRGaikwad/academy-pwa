@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { BookOpen, Eye, EyeOff, Atom, FlaskConical, Calculator, Dna, Users } from 'lucide-react';
+import { BookOpen, Eye, EyeOff, Atom, FlaskConical, Calculator, Dna } from 'lucide-react';
 
 export const Login: React.FC = () => {
   const { login } = useApp();
@@ -9,17 +9,6 @@ export const Login: React.FC = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-
-  const demoCredentials = {
-    admin: { email: 'admin@academy.com', password: 'admin123' },
-  };
-
-  const handleDemoLogin = (role: 'admin') => {
-    const creds = demoCredentials[role];
-    setEmail(creds.email);
-    setPassword(creds.password);
-    setError('');
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
