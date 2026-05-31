@@ -6,8 +6,9 @@ import { StatCard } from '../shared/StatCard';
 import { PageHeader } from '../shared/PageHeader';
 import { IndianRupee, Search, Plus, AlertCircle, CheckCircle2, TrendingUp } from 'lucide-react';
 import { FeePayment } from '../../types';
-import { format } from 'date-fns';
+import { format, startOfMonth, subMonths, isSameMonth } from 'date-fns';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { supabase } from '../../lib/supabase';
 
 export const FeesManagement: React.FC = () => {
   const { students, setStudents, feePayments, setFeePayments } = useApp();
@@ -18,61 +19,105 @@ export const FeesManagement: React.FC = () => {
   const [paymentAmount, setPaymentAmount] = useState('');
   const [paymentMode, setPaymentMode] = useState('Online');
   const [paymentNote, setPaymentNote] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
 
-  const totalCollected = feePayments.reduce((s, p) => s + p.amount, 0);
-  const totalDue = students.reduce((s, st) => s + (st.totalFees - st.paidFees), 0);
-  const totalRevenue = students.reduce((s, st) => s + st.totalFees, 0);
-  const paidFull = students.filter(s => s.paidFees >= s.totalFees).length;
+  const totalCollected = feePayments.reduce((s, p) => s + Number(p.amount), 0);
+  const totalDue = students.reduce((s, st) => s + (Number(st.totalFees) - Number(st.paidFees)), 0);
+  const totalRevenue = students.reduce((s, st) => s + Number(st.totalFees), 0);
+  const paidFull = students.filter(s => Number(s.paidFees) >= Number(s.totalFees)).length;
 
   const filteredStudents = students.filter(s => {
     const matchSearch = s.name.toLowerCase().includes(search.toLowerCase()) ||
       s.studentId.toLowerCase().includes(search.toLowerCase());
-    const due = s.totalFees - s.paidFees;
+    const due = Number(s.totalFees) - Number(s.paidFees);
     const matchStatus = filterStatus === 'all' ||
-      (filterStatus === 'paid' && due === 0) ||
-      (filterStatus === 'partial' && due > 0 && s.paidFees > 0) ||
-      (filterStatus === 'due' && s.paidFees === 0);
+      (filterStatus === 'paid' && due <= 0) ||
+      (filterStatus === 'partial' && due > 0 && Number(s.paidFees) > 0) ||
+      (filterStatus === 'due' && Number(s.paidFees) === 0);
     return matchSearch && matchStatus;
   });
 
-  const monthlyData = [
-    { month: 'Sep', amount: 85000 },
-    { month: 'Oct', amount: 120000 },
-    { month: 'Nov', amount: 95000 },
-    { month: 'Dec', amount: 75000 },
-    { month: 'Jan', amount: 110000 },
-  ];
+  // Dynamic Monthly Data for Analytics
+  const monthlyData = React.useMemo(() => {
+    const months = Array.from({ length: 6 }, (_, i) => subMonths(new Date(), 5 - i));
+    return months.map(month => {
+      const monthTotal = feePayments
+        .filter(p => isSameMonth(new Date(p.date), month))
+        .reduce((sum, p) => sum + Number(p.amount), 0);
+      return {
+        month: format(month, 'MMM'),
+        amount: monthTotal
+      };
+    });
+  }, [feePayments]);
 
-  const handleAddPayment = () => {
-    if (!selectedStudent || !paymentAmount) return;
+  const handleAddPayment = async () => {
+    if (!selectedStudent || !paymentAmount || isSaving) return;
     const student = students.find(s => s.id === selectedStudent);
     if (!student) return;
 
     const amount = Number(paymentAmount);
-    const newPayment: FeePayment = {
-      id: `fp${Date.now()}`,
-      studentId: selectedStudent,
-      amount: amount,
-      date: new Date().toISOString().split('T')[0],
-      mode: paymentMode,
-      receiptNo: `REC${String(feePayments.length + 1).padStart(3, '0')}`,
-      note: paymentNote,
-    };
+    const newPaidFees = Number(student.paidFees) + amount;
 
-    setFeePayments(prev => [...prev, newPayment]);
-    
-    // Update student's paid fees in context automatically
-    setStudents(prev => prev.map(s => 
-      s.id === selectedStudent 
-        ? { ...s, paidFees: s.paidFees + amount } 
-        : s
-    ));
+    setIsSaving(true);
+    try {
+      const newPayment: Omit<FeePayment, 'id'> = {
+        studentId: selectedStudent,
+        amount: amount,
+        date: new Date().toISOString().split('T')[0],
+        mode: paymentMode,
+        receiptNo: `REC${Date.now().toString().slice(-6)}`,
+        note: paymentNote,
+      };
 
-    setShowPayModal(false);
-    setPaymentAmount('');
-    setPaymentNote('');
-    setSelectedStudent('');
-    alert(`Payment of ₹${amount.toLocaleString()} recorded for ${student.name}. Receipt: ${newPayment.receiptNo}`);
+      // 1. Save payment to Supabase
+      const { data: savedPayment, error: payError } = await supabase
+        .from('fee_payments')
+        .insert({
+          student_id: newPayment.studentId,
+          amount: newPayment.amount,
+          date: newPayment.date,
+          mode: newPayment.mode,
+          receipt_no: newPayment.receiptNo,
+          note: newPayment.note
+        })
+        .select()
+        .single();
+
+      if (payError) throw payError;
+
+      // 2. Update student's total paid fees in Supabase
+      const { error: stuError } = await supabase
+        .from('students')
+        .update({ paid_fees: newPaidFees })
+        .eq('id', selectedStudent);
+
+      if (stuError) throw stuError;
+
+      // 3. Update local state for immediate feedback
+      const paymentWithId: FeePayment = {
+        ...newPayment,
+        id: savedPayment.id
+      };
+
+      setFeePayments(prev => [paymentWithId, ...prev]);
+      setStudents(prev => prev.map(s => 
+        s.id === selectedStudent 
+          ? { ...s, paidFees: newPaidFees } 
+          : s
+      ));
+
+      setShowPayModal(false);
+      setPaymentAmount('');
+      setPaymentNote('');
+      setSelectedStudent('');
+      alert(`Payment of ₹${amount.toLocaleString()} recorded successfully.`);
+    } catch (err: any) {
+      console.error('Payment error:', err);
+      alert(`Failed to record payment: ${err.message}`);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const getStatusBadge = (s: typeof students[0]) => {

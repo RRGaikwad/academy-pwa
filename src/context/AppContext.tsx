@@ -199,6 +199,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           })));
         }
 
+        // Fetch Fee Payments
+        const { data: feeData } = await supabase.from('fee_payments').select('*').order('date', { ascending: false });
+        if (feeData) {
+          setFeePayments(feeData.map(p => ({
+            ...p,
+            studentId: p.student_id,
+            receiptNo: p.receipt_no
+          })));
+        }
+
       } catch (err) {
         console.error('Error fetching data from Supabase:', err);
       } finally {
@@ -211,7 +221,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Subscribe to ALL relevant tables for total sync
     const channels = [
       'profiles', 'students', 'teachers', 'batches', 
-      'announcements', 'exams', 'attendance'
+      'announcements', 'exams', 'attendance', 'fee_payments'
     ].map(table => 
       supabase.channel(`public:${table}`)
         .on('postgres_changes', { event: '*', table, schema: 'public' }, () => fetchData())
