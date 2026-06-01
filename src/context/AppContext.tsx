@@ -81,19 +81,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const syncProfile = async (userId: string) => {
       try {
         // 1. Try to get profile
-        let { data: profile } = await supabase
+        const { data: profileData } = await supabase
           .from('profiles')
           .select('*')
           .eq('id', userId)
-          .single();
+          .maybeSingle();
+
+        let profile = profileData || { id: userId };
 
         // 2. If no role in profile, check students table
-        if (!profile?.role) {
+        if (!profile.role) {
           const { data: student } = await supabase
             .from('students')
             .select('*')
             .eq('id', userId)
-            .single();
+            .maybeSingle();
           
           if (student) {
             profile = { ...profile, ...student, role: 'student' };
@@ -101,21 +103,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
 
         // 3. Still no role? check teachers table
-        if (!profile?.role) {
+        if (!profile.role) {
           const { data: teacher } = await supabase
             .from('teachers')
             .select('*')
             .eq('id', userId)
-            .single();
+            .maybeSingle();
           
           if (teacher) {
             profile = { ...profile, ...teacher, role: 'teacher' };
           }
         }
         
-        if (isMounted && profile?.role) {
+        // Ensure role is lowercase for consistency
+        if (profile.role) {
+          profile.role = profile.role.toLowerCase();
+        }
+        
+        if (isMounted && profile.role) {
           setCurrentUser(profile);
           localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(profile));
+        } else if (isMounted) {
+          console.warn('User authenticated but no role found in profiles, students, or teachers');
+          setCurrentUser(null);
+          localStorage.removeItem(STORAGE_KEYS.USER);
         }
       } catch (err) {
         console.error('Profile sync error:', err);
@@ -441,25 +452,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (error) throw error;
 
       // Force profile fetch to ensure user is valid in our DB
-      let { data: profile } = await supabase
+      const { data: profileData } = await supabase
         .from('profiles')
         .select('*')
         .eq('id', data.user.id)
-        .single();
+        .maybeSingle();
+
+      let profile = profileData || { id: data.user.id };
 
       // Fallback: Check Students table
-      if (!profile?.role) {
-        const { data: student } = await supabase.from('students').select('*').eq('id', data.user.id).single();
+      if (!profile.role) {
+        const { data: student } = await supabase.from('students').select('*').eq('id', data.user.id).maybeSingle();
         if (student) profile = { ...profile, ...student, role: 'student' };
       }
 
       // Fallback: Check Teachers table
-      if (!profile?.role) {
-        const { data: teacher } = await supabase.from('teachers').select('*').eq('id', data.user.id).single();
+      if (!profile.role) {
+        const { data: teacher } = await supabase.from('teachers').select('*').eq('id', data.user.id).maybeSingle();
         if (teacher) profile = { ...profile, ...teacher, role: 'teacher' };
       }
 
-      if (!profile?.role) {
+      // Final role check
+      if (profile.role) {
+        profile.role = profile.role.toLowerCase();
+      }
+
+      if (!profile.role) {
         await supabase.auth.signOut();
         return false;
       }
