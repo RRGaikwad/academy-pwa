@@ -137,9 +137,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const initAuth = async () => {
       const { data: { session } } = await supabase.auth.getSession();
+      
       if (session?.user) {
         await syncProfile(session.user.id);
       } else {
+        // ROBUST CHECK: If no Supabase session, check if we have a manually logged in user
+        const saved = localStorage.getItem(STORAGE_KEYS.USER);
+        if (saved) {
+          try {
+            const cachedUser = JSON.parse(saved);
+            // Verify the cached user still exists in their respective table
+            const table = cachedUser.role === 'student' ? 'students' : (cachedUser.role === 'teacher' ? 'teachers' : 'profiles');
+            const { data: verify } = await supabase.from(table).select('id').eq('id', cachedUser.id).maybeSingle();
+            
+            if (verify && isMounted) {
+              setCurrentUser(cachedUser);
+              setAuthLoading(false);
+              return;
+            }
+          } catch (e) {
+            console.error('Cache verification failed', e);
+          }
+        }
+        
         if (isMounted) {
           setCurrentUser(null);
           localStorage.removeItem(STORAGE_KEYS.USER);
@@ -441,61 +461,88 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const login = useCallback(async (email: string, password: string): Promise<boolean> => {
     try {
-      // Clear any existing local cache to prevent stale data
       localStorage.removeItem(STORAGE_KEYS.USER);
+      const cleanEmail = email.toLowerCase().trim();
       
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
+      // 1. Try Supabase Auth First (for Admin and Auth-enabled users)
+      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+        email: cleanEmail,
+        password: password,
       });
       
-      if (error) throw error;
+      if (!authError && authData.user) {
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', authData.user.id)
+          .maybeSingle();
 
-      // Force profile fetch to ensure user is valid in our DB
-      const { data: profileData } = await supabase
-        .from('profiles')
+        let user = profile || { id: authData.user.id, email: cleanEmail };
+        
+        // Fallback role checks for Auth users
+        if (!user.role) {
+          const { data: s } = await supabase.from('students').select('*').eq('id', authData.user.id).maybeSingle();
+          if (s) user = { ...user, ...s, role: 'student' };
+          else {
+            const { data: t } = await supabase.from('teachers').select('*').eq('id', authData.user.id).maybeSingle();
+            if (t) user = { ...user, ...t, role: 'teacher' };
+          }
+        }
+
+        if (user.role) {
+          if (user.role === 'admin' && user.email !== MASTER_ADMIN_EMAIL) {
+            await supabase.auth.signOut();
+            return false;
+          }
+          setCurrentUser(user);
+          localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
+          setActiveTab('dashboard');
+          return true;
+        }
+      }
+
+      // 2. HIGHLY ROBUST FALLBACK: Manual Database Check
+      // This handles Students/Teachers created by Admin who are NOT in Supabase Auth
+      
+      // Check Students Table
+      const { data: studentMatch } = await supabase
+        .from('students')
         .select('*')
-        .eq('id', data.user.id)
+        .eq('password', password) // Exact password match
         .maybeSingle();
 
-      let profile = profileData || { id: data.user.id };
-
-      // Fallback: Check Students table
-      if (!profile.role) {
-        const { data: student } = await supabase.from('students').select('*').eq('id', data.user.id).maybeSingle();
-        if (student) profile = { ...profile, ...student, role: 'student' };
+      if (studentMatch) {
+        const { data: profile } = await supabase.from('profiles').select('*').eq('id', studentMatch.id).maybeSingle();
+        if (profile && profile.email.toLowerCase().trim() === cleanEmail) {
+          const user = { ...profile, ...studentMatch, role: 'student' };
+          setCurrentUser(user);
+          localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
+          setActiveTab('dashboard');
+          return true;
+        }
       }
 
-      // Fallback: Check Teachers table
-      if (!profile.role) {
-        const { data: teacher } = await supabase.from('teachers').select('*').eq('id', data.user.id).maybeSingle();
-        if (teacher) profile = { ...profile, ...teacher, role: 'teacher' };
+      // Check Teachers Table
+      const { data: teacherMatch } = await supabase
+        .from('teachers')
+        .select('*')
+        .eq('password', password)
+        .maybeSingle();
+
+      if (teacherMatch) {
+        const { data: profile } = await supabase.from('profiles').select('*').eq('id', teacherMatch.id).maybeSingle();
+        if (profile && profile.email.toLowerCase().trim() === cleanEmail) {
+          const user = { ...profile, ...teacherMatch, role: 'teacher' };
+          setCurrentUser(user);
+          localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
+          setActiveTab('dashboard');
+          return true;
+        }
       }
 
-      // Final role check
-      if (profile.role) {
-        profile.role = profile.role.toLowerCase();
-      }
-
-      if (!profile.role) {
-        await supabase.auth.signOut();
-        return false;
-      }
-
-      // High Security Lock: Check if Admin role is actually the Master Email
-      if (profile.role === 'admin' && profile.email !== MASTER_ADMIN_EMAIL) {
-        await supabase.auth.signOut();
-        console.error('Unauthorized Admin Access Attempt blocked.');
-        return false;
-      }
-
-      // Update state and cache
-      setCurrentUser(profile);
-      localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(profile));
-      setActiveTab('dashboard');
-      return true;
+      return false;
     } catch (err) {
-      console.error('Login error:', err);
+      console.error('Unified Login Error:', err);
       return false;
     }
   }, []);
