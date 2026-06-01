@@ -4,7 +4,6 @@ import { supabase } from '../lib/supabase';
 import { usePWA } from '../hooks/usePWA';
 
 const STORAGE_KEYS = {
-  USER: 'ams_user',
   ACTIVE_TAB: 'ams_active_tab',
   EXAMS: 'ams_exams',
   ANNOUNCEMENTS: 'ams_announcements',
@@ -50,10 +49,7 @@ const MASTER_ADMIN_EMAIL = 'gaikwadrohan8005@gmail.com';
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { isInstallable, installApp } = usePWA();
-  const [currentUser, setCurrentUser] = useState<(User & any) | null>(() => {
-    const savedUser = localStorage.getItem(STORAGE_KEYS.USER);
-    return savedUser ? JSON.parse(savedUser) : null;
-  });
+  const [currentUser, setCurrentUser] = useState<(User & any) | null>(null);
   const [students, setStudents] = useState<Student[]>([]);
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [batches, setBatches] = useState<Batch[]>([]);
@@ -68,14 +64,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return localStorage.getItem(STORAGE_KEYS.ACTIVE_TAB) || 'dashboard';
   });
 
-  // Sync session only to localStorage
+  // Supabase Auth State Listener
   useEffect(() => {
-    if (currentUser) {
-      localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(currentUser));
-    } else {
-      localStorage.removeItem(STORAGE_KEYS.USER);
-    }
-  }, [currentUser]);
+    const handleAuthStateChange = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      
+      if (session?.user) {
+        try {
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', session.user.id)
+            .single();
+          
+          if (profile) {
+            setCurrentUser(profile);
+          }
+        } catch (err) {
+          console.error('Error fetching profile:', err);
+        }
+      } else {
+        setCurrentUser(null);
+      }
+      setLoading(false);
+    };
+
+    handleAuthStateChange();
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.user) {
+        handleAuthStateChange();
+      } else {
+        setCurrentUser(null);
+        setLoading(false);
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.ACTIVE_TAB, activeTab);
@@ -380,7 +406,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const logout = useCallback(() => {
     setCurrentUser(null);
     setActiveTab('dashboard');
-    localStorage.removeItem(STORAGE_KEYS.USER);
     localStorage.removeItem(STORAGE_KEYS.ACTIVE_TAB);
     supabase.auth.signOut(); // Sign out from Supabase
     // Add clear storage option for developers or full reset
