@@ -18,7 +18,16 @@ import { NotificationsPage } from './components/student/NotificationsPage';
 import { StudyMaterials } from './components/shared/StudyMaterials';
 
 const AppContent = () => {
-  const { currentUser, activeTab, loading } = useApp();
+  const { currentUser, activeTab, loading, authLoading } = useApp();
+
+  if (authLoading && !currentUser) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4">
+        <div className="w-12 h-12 border-4 border-purple-600 border-t-transparent rounded-full animate-spin mb-4"></div>
+        <p className="text-slate-600 font-medium animate-pulse">Checking your session...</p>
+      </div>
+    );
+  }
 
   if (!currentUser) return <Login />;
 

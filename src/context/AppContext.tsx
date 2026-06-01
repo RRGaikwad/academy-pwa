@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase';
 import { usePWA } from '../hooks/usePWA';
 
 const STORAGE_KEYS = {
+  USER: 'ams_user',
   ACTIVE_TAB: 'ams_active_tab',
   EXAMS: 'ams_exams',
   ANNOUNCEMENTS: 'ams_announcements',
@@ -39,6 +40,7 @@ interface AppContextType {
   activeTab: string;
   setActiveTab: (tab: string) => void;
   loading: boolean;
+  authLoading: boolean;
   isInstallable: boolean;
   installApp: () => Promise<void>;
 }
@@ -49,7 +51,14 @@ const MASTER_ADMIN_EMAIL = 'gaikwadrohan8005@gmail.com';
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { isInstallable, installApp } = usePWA();
-  const [currentUser, setCurrentUser] = useState<(User & any) | null>(null);
+  const [currentUser, setCurrentUser] = useState<(User & any) | null>(() => {
+    const saved = localStorage.getItem(STORAGE_KEYS.USER);
+    try {
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
   const [students, setStudents] = useState<Student[]>([]);
   const [teachers, setTeachers] = useState<Teacher[]>([]);
   const [batches, setBatches] = useState<Batch[]>([]);
@@ -59,48 +68,72 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [feePayments, setFeePayments] = useState<FeePayment[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [studyMaterials, setStudyMaterials] = useState<StudyMaterial[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [authLoading, setAuthLoading] = useState(true);
   const [activeTab, setActiveTab] = useState(() => {
     return localStorage.getItem(STORAGE_KEYS.ACTIVE_TAB) || 'dashboard';
   });
 
-  // Supabase Auth State Listener
+  // Unified Auth State Listener
   useEffect(() => {
-    const handleAuthStateChange = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      
-      if (session?.user) {
-        try {
-          const { data: profile } = await supabase
-            .from('profiles')
-            .select('*')
-            .eq('id', session.user.id)
-            .single();
-          
-          if (profile) {
-            setCurrentUser(profile);
-          }
-        } catch (err) {
-          console.error('Error fetching profile:', err);
+    let isMounted = true;
+
+    const syncProfile = async (userId: string) => {
+      try {
+        const { data: profile, error } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', userId)
+          .single();
+
+        if (error) throw error;
+        
+        if (isMounted && profile) {
+          setCurrentUser(profile);
+          localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(profile));
         }
-      } else {
-        setCurrentUser(null);
+      } catch (err) {
+        console.error('Profile sync error:', err);
+        if (isMounted) {
+          // If profile fetch fails, we might still have the user from localStorage
+          // but we shouldn't force a logout yet unless it's a 404
+        }
+      } finally {
+        if (isMounted) setAuthLoading(false);
       }
-      setLoading(false);
     };
 
-    handleAuthStateChange();
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const initAuth = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
       if (session?.user) {
-        handleAuthStateChange();
+        await syncProfile(session.user.id);
       } else {
+        if (isMounted) {
+          setCurrentUser(null);
+          localStorage.removeItem(STORAGE_KEYS.USER);
+          setAuthLoading(false);
+        }
+      }
+    };
+
+    initAuth();
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (!isMounted) return;
+
+      if (event === 'SIGNED_IN' && session?.user) {
+        await syncProfile(session.user.id);
+      } else if (event === 'SIGNED_OUT') {
         setCurrentUser(null);
-        setLoading(false);
+        localStorage.removeItem(STORAGE_KEYS.USER);
+        setAuthLoading(false);
       }
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      isMounted = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
@@ -109,9 +142,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Supabase Data Fetching & Real-time Subscriptions
   useEffect(() => {
+    let isMounted = true;
+
     const fetchData = async () => {
       if (!currentUser) {
-        setLoading(false);
         return;
       }
 
@@ -135,6 +169,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           supabase.from('exams').select('*').order('scheduled_at', { ascending: false }),
           supabase.from('attendance').select('*')
         ]);
+
+        if (!isMounted) return;
 
         const profiles = profilesRes.data || [];
         
@@ -229,7 +265,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         // Fetch Fee Payments
         const { data: feeData } = await supabase.from('fee_payments').select('*').order('date', { ascending: false });
-        if (feeData) {
+        if (isMounted && feeData) {
           setFeePayments(feeData.map(p => ({
             ...p,
             studentId: p.student_id,
@@ -240,7 +276,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } catch (err) {
         console.error('Error fetching data from Supabase:', err);
       } finally {
-        setLoading(false);
+        if (isMounted) setLoading(false);
       }
     };
 
@@ -275,7 +311,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               password: s.password || ''
             };
           });
-          setStudents(formatted);
+          if (isMounted) setStudents(formatted);
         }
       }},
       { name: 'teachers', fetcher: async () => {
@@ -296,13 +332,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               password: t.password || ''
             };
           });
-          setTeachers(formatted);
+          if (isMounted) setTeachers(formatted);
         }
       }},
       { name: 'batches', fetcher: async () => {
         const { data } = await supabase.from('batches').select('*');
         if (data) {
-          setBatches(data.map(b => ({
+          if (isMounted) setBatches(data.map(b => ({
             ...b,
             studentIds: b.student_ids || [],
             teacherIds: b.teacher_ids || []
@@ -312,7 +348,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       { name: 'announcements', fetcher: async () => {
         const { data } = await supabase.from('announcements').select('*').order('created_at', { ascending: false });
         if (data) {
-          setAnnouncements(data.map(a => ({
+          if (isMounted) setAnnouncements(data.map(a => ({
             ...a,
             authorId: a.author_id,
             authorName: a.author_name,
@@ -326,7 +362,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       { name: 'exams', fetcher: async () => {
         const { data } = await supabase.from('exams').select('*').order('scheduled_at', { ascending: false });
         if (data) {
-          setExams(data.map(e => ({
+          if (isMounted) setExams(data.map(e => ({
             ...e,
             teacherId: e.teacher_id,
             batchId: e.batch_id,
@@ -339,7 +375,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       { name: 'attendance', fetcher: async () => {
         const { data } = await supabase.from('attendance').select('*');
         if (data) {
-          setAttendance(data.map(at => ({
+          if (isMounted) setAttendance(data.map(at => ({
             ...at,
             batchId: at.batch_id,
             teacherId: at.teacher_id
@@ -349,7 +385,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       { name: 'fee_payments', fetcher: async () => {
         const { data } = await supabase.from('fee_payments').select('*').order('date', { ascending: false });
         if (data) {
-          setFeePayments(data.map(p => ({
+          if (isMounted) setFeePayments(data.map(p => ({
             ...p,
             studentId: p.student_id,
             receiptNo: p.receipt_no
@@ -365,12 +401,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
 
     return () => {
+      isMounted = false;
       channels.forEach(channel => supabase.removeChannel(channel));
     };
   }, [currentUser]);
 
   const login = useCallback(async (email: string, password: string): Promise<boolean> => {
     try {
+      // Clear any existing local cache to prevent stale data
+      localStorage.removeItem(STORAGE_KEYS.USER);
+      
       const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password,
@@ -378,23 +418,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       
       if (error) throw error;
 
-      // 1. Fetch user profile
+      // Force profile fetch to ensure user is valid in our DB
       const { data: profile, error: profileError } = await supabase
         .from('profiles')
         .select('*')
         .eq('id', data.user.id)
         .single();
 
-      if (profileError) throw profileError;
+      if (profileError || !profile) {
+        await supabase.auth.signOut();
+        return false;
+      }
 
-      // 2. High Security Lock: Check if Admin role is actually the Master Email
+      // High Security Lock: Check if Admin role is actually the Master Email
       if (profile.role === 'admin' && profile.email !== MASTER_ADMIN_EMAIL) {
         await supabase.auth.signOut();
         console.error('Unauthorized Admin Access Attempt blocked.');
         return false;
       }
 
+      // Update state and cache
       setCurrentUser(profile);
+      localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(profile));
       setActiveTab('dashboard');
       return true;
     } catch (err) {
@@ -406,6 +451,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const logout = useCallback(() => {
     setCurrentUser(null);
     setActiveTab('dashboard');
+    localStorage.removeItem(STORAGE_KEYS.USER);
     localStorage.removeItem(STORAGE_KEYS.ACTIVE_TAB);
     supabase.auth.signOut(); // Sign out from Supabase
     // Add clear storage option for developers or full reset
@@ -431,6 +477,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       login, logout,
       activeTab, setActiveTab,
       loading,
+      authLoading,
       isInstallable,
       installApp
     }}>
