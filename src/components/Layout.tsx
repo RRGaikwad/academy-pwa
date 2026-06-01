@@ -3,7 +3,7 @@ import { useApp } from '../context/AppContext';
 import {
   LayoutDashboard, Users, GraduationCap, BookOpen, ClipboardList,
   IndianRupee, Megaphone, LogOut, Menu, X, ChevronRight,
-  UserCheck, FileText, Trophy, Bell, Layers
+  UserCheck, FileText, Trophy, Bell, Layers, Download
 } from 'lucide-react';
 
 interface NavItem {
@@ -53,65 +53,78 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
     setDrawerOpen(false);
   };
 
-  const SidebarContent = () => (
-    <div className="flex flex-col h-full bg-white">
-      {/* Drawer Header */}
-      <div className={`bg-gradient-to-br ${roleColors[currentUser?.role || 'student']} p-5 text-white`}>
-        <div className="flex items-start justify-between mb-4">
-          <div>
-            <div className="text-2xl font-bold">VidyaSphere</div>
-            <div className="text-white/70 text-xs mt-0.5">JEE • NEET Coaching CMS</div>
+  const SidebarContent = () => {
+    const { isInstallable, installApp } = useApp();
+    
+    return (
+      <div className="flex flex-col h-full bg-white">
+        {/* Drawer Header */}
+        <div className={`bg-gradient-to-br ${roleColors[currentUser?.role || 'student']} p-5 text-white`}>
+          <div className="flex items-start justify-between mb-4">
+            <div>
+              <div className="text-2xl font-bold">VidyaSphere</div>
+              <div className="text-white/70 text-xs mt-0.5">JEE • NEET Coaching CMS</div>
+            </div>
+            <button onClick={() => setDrawerOpen(false)}
+              className="text-white/60 hover:text-white p-1 lg:hidden">
+              <X size={20} />
+            </button>
           </div>
-          <button onClick={() => setDrawerOpen(false)}
-            className="text-white/60 hover:text-white p-1 lg:hidden">
-            <X size={20} />
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center text-white font-bold text-lg">
+              {currentUser?.name?.charAt(0)}
+            </div>
+            <div>
+              <p className="font-semibold text-white">{currentUser?.name}</p>
+              <p className="text-white/70 text-xs">{roleLabels[currentUser?.role || '']}</p>
+              <p className="text-white/60 text-xs mt-0.5">{currentUser?.email}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Nav Items */}
+        <nav className="flex-1 overflow-y-auto py-3">
+          {userNav.map(item => (
+            <button
+              key={item.key}
+              onClick={() => handleNav(item.key)}
+              className={`w-full flex items-center gap-3 px-4 py-3.5 text-sm font-medium transition-all ${activeTab === item.key
+                  ? 'bg-blue-50 text-blue-700 border-r-4 border-blue-600'
+                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-800'
+                }`}
+            >
+              <span className={activeTab === item.key ? 'text-blue-600' : 'text-slate-400'}>
+                {item.icon}
+              </span>
+              <span className="flex-1 text-left">{item.label}</span>
+              {item.key === 'notifications' && unreadCount > 0 && (
+                <span className="bg-red-500 text-white text-xs font-bold px-1.5 py-0.5 rounded-full">{unreadCount}</span>
+              )}
+              <ChevronRight size={14} className="text-slate-300" />
+            </button>
+          ))}
+        </nav>
+
+        {/* Install & Logout */}
+        <div className="p-4 border-t border-slate-100 space-y-2">
+          {isInstallable && (
+            <button
+              onClick={installApp}
+              className="w-full flex items-center gap-3 px-4 py-3 text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-xl text-sm font-semibold transition-colors"
+            >
+              <Download size={18} />
+              Install App
+            </button>
+          )}
+          <button onClick={logout}
+            className="w-full flex items-center gap-3 px-4 py-3 text-red-600 bg-red-50 hover:bg-red-100 rounded-xl text-sm font-semibold transition-colors">
+            <LogOut size={18} />
+            Sign Out
           </button>
         </div>
-        <div className="flex items-center gap-3">
-          <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center text-white font-bold text-lg">
-            {currentUser?.name?.charAt(0)}
-          </div>
-          <div>
-            <p className="font-semibold text-white">{currentUser?.name}</p>
-            <p className="text-white/70 text-xs">{roleLabels[currentUser?.role || '']}</p>
-            <p className="text-white/60 text-xs mt-0.5">{currentUser?.email}</p>
-          </div>
-        </div>
       </div>
-
-      {/* Nav Items */}
-      <nav className="flex-1 overflow-y-auto py-3">
-        {userNav.map(item => (
-          <button
-            key={item.key}
-            onClick={() => handleNav(item.key)}
-            className={`w-full flex items-center gap-3 px-4 py-3.5 text-sm font-medium transition-all ${activeTab === item.key
-                ? 'bg-blue-50 text-blue-700 border-r-4 border-blue-600'
-                : 'text-slate-600 hover:bg-slate-50 hover:text-slate-800'
-              }`}
-          >
-            <span className={activeTab === item.key ? 'text-blue-600' : 'text-slate-400'}>
-              {item.icon}
-            </span>
-            <span className="flex-1 text-left">{item.label}</span>
-            {item.key === 'notifications' && unreadCount > 0 && (
-              <span className="bg-red-500 text-white text-xs font-bold px-1.5 py-0.5 rounded-full">{unreadCount}</span>
-            )}
-            <ChevronRight size={14} className="text-slate-300" />
-          </button>
-        ))}
-      </nav>
-
-      {/* Logout */}
-      <div className="p-4 border-t border-slate-100">
-        <button onClick={logout}
-          className="w-full flex items-center gap-3 px-4 py-3 text-red-600 bg-red-50 hover:bg-red-100 rounded-xl text-sm font-semibold transition-colors">
-          <LogOut size={18} />
-          Sign Out
-        </button>
-      </div>
-    </div>
-  );
+    );
+  };
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col lg:flex-row relative">

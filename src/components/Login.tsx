@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { BookOpen, Eye, EyeOff, Atom, FlaskConical, Calculator, Dna } from 'lucide-react';
+import { BookOpen, Eye, EyeOff, Atom, FlaskConical, Calculator, Dna, Download } from 'lucide-react';
 
 export const Login: React.FC = () => {
-  const { login } = useApp();
+  const { login, isInstallable, installApp } = useApp();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -122,6 +122,18 @@ export const Login: React.FC = () => {
             </div>
           </div>
         </div>
+
+        {isInstallable && (
+          <div className="mt-4 animate-in fade-in slide-in-from-bottom-2 duration-500">
+            <button
+              onClick={installApp}
+              className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-white/10 hover:bg-white/20 border border-white/10 rounded-xl text-white font-medium transition-all group"
+            >
+              <Download size={18} className="text-orange-400 group-hover:scale-110 transition-transform" />
+              <span>Install VidyaSphere App</span>
+            </button>
+          </div>
+        )}
 
         <p className="text-center text-white/20 text-xs mt-6">
           © 2025 VidyaSphere • India's Premier Coaching Management Platform

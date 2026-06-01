@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import { User, Student, Teacher, Batch, AttendanceRecord, Exam, ExamResult, FeePayment, Announcement, StudyMaterial } from '../types';
 import { supabase } from '../lib/supabase';
+import { usePWA } from '../hooks/usePWA';
 
 const STORAGE_KEYS = {
   USER: 'ams_user',
@@ -39,6 +40,8 @@ interface AppContextType {
   activeTab: string;
   setActiveTab: (tab: string) => void;
   loading: boolean;
+  isInstallable: boolean;
+  installApp: () => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -46,6 +49,7 @@ const AppContext = createContext<AppContextType | null>(null);
 const MASTER_ADMIN_EMAIL = 'gaikwadrohan8005@gmail.com';
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { isInstallable, installApp } = usePWA();
   const [currentUser, setCurrentUser] = useState<(User & any) | null>(() => {
     const savedUser = localStorage.getItem(STORAGE_KEYS.USER);
     return savedUser ? JSON.parse(savedUser) : null;
@@ -216,13 +220,121 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     fetchData();
 
-    // Subscribe to ALL relevant tables for total sync
-    const channels = [
-      'profiles', 'students', 'teachers', 'batches', 
-      'announcements', 'exams', 'attendance', 'fee_payments'
-    ].map(table => 
-      supabase.channel(`public:${table}`)
-        .on('postgres_changes', { event: '*', table, schema: 'public' }, () => fetchData())
+    // Subscribe to tables for targeted sync
+    const tables = [
+      { name: 'profiles', fetcher: fetchData },
+      { name: 'students', fetcher: async () => {
+        const { data } = await supabase.from('students').select('*');
+        if (data) {
+          const { data: profiles } = await supabase.from('profiles').select('*');
+          const formatted: Student[] = data.map(s => {
+            const p = profiles?.find(prof => prof.id === s.id) || {};
+            return {
+              ...s,
+              name: p.name || 'Unknown',
+              email: p.email || '',
+              phone: p.phone || '',
+              role: 'student',
+              studentId: s.student_id,
+              batchId: s.batch_id,
+              parentName: s.parent_name,
+              parentPhone: s.parent_phone,
+              attendancePercent: Number(s.attendance_percent) || 0,
+              performanceScore: Number(s.performance_score) || 0,
+              subjects: s.subjects || [],
+              admissionDate: s.admission_date || '',
+              totalFees: Number(s.total_fees) || 0,
+              paidFees: Number(s.paid_fees) || 0,
+              notes: s.notes || '',
+              password: s.password || ''
+            };
+          });
+          setStudents(formatted);
+        }
+      }},
+      { name: 'teachers', fetcher: async () => {
+        const { data } = await supabase.from('teachers').select('*');
+        if (data) {
+          const { data: profiles } = await supabase.from('profiles').select('*');
+          const formatted: Teacher[] = data.map(t => {
+            const p = profiles?.find(prof => prof.id === t.id) || {};
+            return {
+              ...t,
+              name: p.name || 'Unknown',
+              email: p.email || '',
+              phone: p.phone || '',
+              role: 'teacher',
+              teacherId: t.teacher_id,
+              assignedCategories: t.assigned_categories || [],
+              permissions: t.permissions || [],
+              password: t.password || ''
+            };
+          });
+          setTeachers(formatted);
+        }
+      }},
+      { name: 'batches', fetcher: async () => {
+        const { data } = await supabase.from('batches').select('*');
+        if (data) {
+          setBatches(data.map(b => ({
+            ...b,
+            studentIds: b.student_ids || [],
+            teacherIds: b.teacher_ids || []
+          })));
+        }
+      }},
+      { name: 'announcements', fetcher: async () => {
+        const { data } = await supabase.from('announcements').select('*').order('created_at', { ascending: false });
+        if (data) {
+          setAnnouncements(data.map(a => ({
+            ...a,
+            authorId: a.author_id,
+            authorName: a.author_name,
+            targetRole: a.target_role,
+            targetBatch: a.target_batch,
+            createdAt: a.created_at,
+            referenceId: a.reference_id
+          })));
+        }
+      }},
+      { name: 'exams', fetcher: async () => {
+        const { data } = await supabase.from('exams').select('*').order('scheduled_at', { ascending: false });
+        if (data) {
+          setExams(data.map(e => ({
+            ...e,
+            teacherId: e.teacher_id,
+            batchId: e.batch_id,
+            scheduledAt: e.scheduled_at,
+            chapterTags: e.chapter_tags || [],
+            hasNegativeMarking: e.has_negative_marking
+          })));
+        }
+      }},
+      { name: 'attendance', fetcher: async () => {
+        const { data } = await supabase.from('attendance').select('*');
+        if (data) {
+          setAttendance(data.map(at => ({
+            ...at,
+            batchId: at.batch_id,
+            teacherId: at.teacher_id
+          })));
+        }
+      }},
+      { name: 'fee_payments', fetcher: async () => {
+        const { data } = await supabase.from('fee_payments').select('*').order('date', { ascending: false });
+        if (data) {
+          setFeePayments(data.map(p => ({
+            ...p,
+            studentId: p.student_id,
+            receiptNo: p.receipt_no
+          })));
+        }
+      }}
+    ];
+
+    const channels = tables.map(table => 
+      supabase.channel(`public:${table.name}`)
+        .on('postgres_changes', { event: '*', table: table.name, schema: 'public' }, () => table.fetcher())
         .subscribe()
     );
 
@@ -293,7 +405,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       studyMaterials, setStudyMaterials,
       login, logout,
       activeTab, setActiveTab,
-      loading
+      loading,
+      isInstallable,
+      installApp
     }}>
       {children}
     </AppContext.Provider>
