@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { supabase, isSupabaseConfigured } from './supabase';
 import type { UserRole } from '../types';
 
 export type AcademySessionUser = Record<string, unknown> & {
@@ -15,12 +15,15 @@ export type LoginResult =
 
 export const normalizeEmail = (email: string): string => email.toLowerCase().trim();
 
+export const normalizePassword = (password: string): string => password.trim();
+
 type ProfileRow = {
   id: string;
   name: string;
   email: string;
   phone?: string | null;
   role?: string | null;
+  password?: string | null;
 };
 
 type StudentRow = Record<string, unknown> & {
@@ -48,6 +51,24 @@ type TeacherRow = Record<string, unknown> & {
   assigned_categories?: string[];
   permissions?: string[];
   password?: string;
+};
+
+const parseRpcPayload = (data: unknown): Record<string, unknown> | null => {
+  if (data == null) return null;
+  if (typeof data === 'string') {
+    try {
+      const parsed: unknown = JSON.parse(data);
+      return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : null;
+    } catch {
+      return null;
+    }
+  }
+  if (typeof data === 'object' && !Array.isArray(data)) {
+    return data as Record<string, unknown>;
+  }
+  return null;
 };
 
 const mapStudentSession = (profile: ProfileRow, student: StudentRow): AcademySessionUser => ({
@@ -83,8 +104,11 @@ const mapTeacherSession = (profile: ProfileRow, teacher: TeacherRow): AcademySes
   permissions: teacher.permissions ?? [],
 });
 
-const mapRpcSession = (data: Record<string, unknown>): AcademySessionUser => {
-  const role = String(data.role ?? '').toLowerCase() as UserRole;
+const mapRpcSession = (data: Record<string, unknown>): AcademySessionUser | null => {
+  const role = String(data.role ?? '').toLowerCase();
+  if (!data.id || (role !== 'student' && role !== 'teacher')) {
+    return null;
+  }
   if (role === 'student') {
     return {
       id: String(data.id),
@@ -120,13 +144,23 @@ const mapRpcSession = (data: Record<string, unknown>): AcademySessionUser => {
   };
 };
 
-const passwordsMatch = (stored: string | null | undefined, input: string): boolean =>
-  typeof stored === 'string' && stored.length > 0 && stored === input;
+const passwordsMatch = (
+  stored: string | null | undefined,
+  input: string,
+  profilePassword?: string | null
+): boolean => {
+  const normalized = normalizePassword(input);
+  if (!normalized) return false;
+  const candidates = [stored, profilePassword].filter(
+    (v): v is string => typeof v === 'string' && v.trim().length > 0
+  );
+  return candidates.some((v) => v.trim() === normalized);
+};
 
 async function findProfileByEmail(email: string): Promise<ProfileRow | null> {
   const { data, error } = await supabase
     .from('profiles')
-    .select('id, name, email, phone, role')
+    .select('id, name, email, phone, role, password')
     .ilike('email', email)
     .maybeSingle();
 
@@ -177,7 +211,8 @@ async function authenticateAcademyUserDirect(
       .eq('id', profile.id)
       .maybeSingle();
 
-    if (error || !student || !passwordsMatch(student.password as string, password)) {
+    if (error || !student) return null;
+    if (!passwordsMatch(student.password as string, password, profile.password)) {
       return null;
     }
     return mapStudentSession(profile, student as StudentRow);
@@ -189,7 +224,8 @@ async function authenticateAcademyUserDirect(
     .eq('id', profile.id)
     .maybeSingle();
 
-  if (error || !teacher || !passwordsMatch(teacher.password as string, password)) {
+  if (error || !teacher) return null;
+  if (!passwordsMatch(teacher.password as string, password, profile.password)) {
     return null;
   }
   return mapTeacherSession(profile, teacher as TeacherRow);
@@ -200,21 +236,29 @@ export async function authenticateAcademyUser(
   password: string
 ): Promise<AcademySessionUser | null> {
   const cleanEmail = normalizeEmail(email);
+  const cleanPassword = normalizePassword(password);
 
   const { data: rpcData, error: rpcError } = await supabase.rpc('authenticate_academy_user', {
     p_email: cleanEmail,
-    p_password: password,
+    p_password: cleanPassword,
   });
 
-  if (!rpcError && rpcData && typeof rpcData === 'object') {
-    return mapRpcSession(rpcData as Record<string, unknown>);
+  if (rpcError) {
+    const missingFn =
+      rpcError.message.includes('Could not find the function') ||
+      rpcError.message.includes('does not exist');
+    if (!missingFn) {
+      console.warn('RPC authenticate_academy_user:', rpcError.message);
+    }
+  } else {
+    const payload = parseRpcPayload(rpcData);
+    if (payload) {
+      const user = mapRpcSession(payload);
+      if (user) return user;
+    }
   }
 
-  if (rpcError && !rpcError.message.includes('Could not find the function')) {
-    console.warn('RPC authenticate_academy_user:', rpcError.message);
-  }
-
-  return authenticateAcademyUserDirect(cleanEmail, password);
+  return authenticateAcademyUserDirect(cleanEmail, cleanPassword);
 }
 
 export async function restoreAcademyUserById(
@@ -226,13 +270,17 @@ export async function restoreAcademyUserById(
     p_role: role,
   });
 
-  if (!rpcError && rpcData && typeof rpcData === 'object') {
-    return mapRpcSession(rpcData as Record<string, unknown>);
+  if (!rpcError) {
+    const payload = parseRpcPayload(rpcData);
+    if (payload) {
+      const user = mapRpcSession(payload);
+      if (user) return user;
+    }
   }
 
   const { data: profile } = await supabase
     .from('profiles')
-    .select('id, name, email, phone, role')
+    .select('id, name, email, phone, role, password')
     .eq('id', userId)
     .maybeSingle();
 
@@ -250,17 +298,26 @@ export async function restoreAcademyUserById(
 }
 
 export async function performAcademyLogin(email: string, password: string): Promise<LoginResult> {
+  if (!isSupabaseConfigured()) {
+    return {
+      ok: false,
+      reason:
+        'App is not connected to Supabase. Add your Project URL and anon key to a `.env` file, then restart the dev server.',
+    };
+  }
+
   const cleanEmail = normalizeEmail(email);
-  if (!cleanEmail || !password) {
+  const cleanPassword = normalizePassword(password);
+  if (!cleanEmail || !cleanPassword) {
     return { ok: false, reason: 'Email and password are required.' };
   }
 
-  const user = await authenticateAcademyUser(cleanEmail, password);
+  const user = await authenticateAcademyUser(cleanEmail, cleanPassword);
   if (!user) {
     return {
       ok: false,
       reason:
-        'Incorrect email or password. Use the exact credentials shown when your account was created.',
+        'Incorrect email or password. In Admin, open the student/teacher, confirm the password field, click Update, then try again.',
     };
   }
 

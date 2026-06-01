@@ -5,7 +5,7 @@ import { Badge } from '../shared/Badge';
 import { Modal } from '../shared/Modal';
 import { PageHeader } from '../shared/PageHeader';
 import { supabase } from '../../lib/supabase';
-import { normalizeEmail } from '../../lib/auth';
+import { normalizeEmail, normalizePassword } from '../../lib/auth';
 import { Plus, Edit2, Trash2, Eye, Search, Users } from 'lucide-react';
 
 const defaultTeacher: Omit<Teacher, 'id' | 'role'> = {
@@ -69,6 +69,9 @@ export const TeacherManagement: React.FC = () => {
     if (teacher.email) {
       teacher.email = normalizeEmail(teacher.email);
     }
+    if (teacher.password) {
+      teacher.password = normalizePassword(teacher.password);
+    }
 
     try {
       if (isEditing) {
@@ -79,6 +82,7 @@ export const TeacherManagement: React.FC = () => {
             name: teacher.name,
             email: teacher.email,
             phone: teacher.phone,
+            password: teacher.password,
           })
           .eq('id', teacher.id);
         
@@ -109,6 +113,7 @@ export const TeacherManagement: React.FC = () => {
             email: teacher.email,
             role: 'teacher',
             phone: teacher.phone,
+            password: teacher.password,
           });
         
         if (profileError) throw profileError;

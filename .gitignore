@@ -25,3 +25,8 @@ dist-ssr
 
 # Vite
 .vite
+
+# Environment (never commit real keys)
+.env
+.env.local
+.env.*.local

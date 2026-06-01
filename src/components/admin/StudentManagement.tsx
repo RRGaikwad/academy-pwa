@@ -5,7 +5,7 @@ import { Badge } from '../shared/Badge';
 import { Modal } from '../shared/Modal';
 import { PageHeader } from '../shared/PageHeader';
 import { supabase } from '../../lib/supabase';
-import { normalizeEmail } from '../../lib/auth';
+import { normalizeEmail, normalizePassword } from '../../lib/auth';
 import {
   Plus, Search, Edit2, Trash2, Eye,
   GraduationCap, ChevronDown
@@ -100,6 +100,7 @@ export const StudentManagement: React.FC = () => {
     }
 
     student.email = normalizeEmail(student.email);
+    student.password = normalizePassword(student.password);
 
     // Auto assign subjects
     if (student.stream === 'PCM') student.subjects = ['Physics', 'Chemistry', 'Mathematics'];
@@ -118,6 +119,7 @@ export const StudentManagement: React.FC = () => {
             name: student.name,
             email: student.email,
             phone: student.phone,
+            password: student.password,
           })
           .eq('id', student.id);
 
@@ -157,6 +159,7 @@ export const StudentManagement: React.FC = () => {
             email: student.email,
             role: 'student',
             phone: student.phone,
+            password: student.password,
           });
 
         if (profileError) throw profileError;

@@ -5,9 +5,11 @@ import {
   type AcademySessionUser,
   type LoginResult,
   normalizeEmail,
+  normalizePassword,
   performAcademyLogin,
   restoreAcademyUserById,
 } from '../lib/auth';
+import { isSupabaseConfigured } from '../lib/supabase';
 import { usePWA } from '../hooks/usePWA';
 
 const STORAGE_KEYS = {
@@ -496,7 +498,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const login = useCallback(async (email: string, password: string): Promise<LoginResult> => {
     try {
+      if (!isSupabaseConfigured()) {
+        return {
+          ok: false,
+          reason:
+            'App is not connected to Supabase. Add your Project URL and anon key to `.env`, then restart the dev server.',
+        };
+      }
+
       const cleanEmail = normalizeEmail(email);
+      const cleanPassword = normalizePassword(password);
 
       const { data: profile } = await supabase
         .from('profiles')
@@ -515,7 +526,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
           email: cleanEmail,
-          password,
+          password: cleanPassword,
         });
 
         if (authError || !authData.user) {
@@ -535,7 +546,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       await supabase.auth.signOut();
 
-      const academyResult = await performAcademyLogin(cleanEmail, password);
+      const academyResult = await performAcademyLogin(cleanEmail, cleanPassword);
       if (!academyResult.ok) {
         return academyResult;
       }
