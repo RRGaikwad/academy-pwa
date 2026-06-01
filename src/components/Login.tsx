@@ -17,10 +17,14 @@ export const Login: React.FC = () => {
     try {
       const success = await login(email, password);
       if (!success) {
-        setError('Invalid email or password. Access is restricted to authorized accounts.');
+        setError('Access denied. Please ensure you are using authorized credentials and your account has an assigned role (Student/Teacher/Admin).');
       }
-    } catch (err) {
-      setError('Login failed. Please check your connection or credentials.');
+    } catch (err: any) {
+      if (err.message?.includes('Invalid login credentials')) {
+        setError('Incorrect email or password. Please try again.');
+      } else {
+        setError('Login failed due to a connection or server error. Please try again.');
+      }
     } finally {
       setLoading(false);
     }

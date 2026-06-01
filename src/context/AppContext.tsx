@@ -80,24 +80,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const syncProfile = async (userId: string) => {
       try {
-        const { data: profile, error } = await supabase
+        // 1. Try to get profile
+        let { data: profile } = await supabase
           .from('profiles')
           .select('*')
           .eq('id', userId)
           .single();
 
-        if (error) throw error;
+        // 2. If no role in profile, check students table
+        if (!profile?.role) {
+          const { data: student } = await supabase
+            .from('students')
+            .select('*')
+            .eq('id', userId)
+            .single();
+          
+          if (student) {
+            profile = { ...profile, ...student, role: 'student' };
+          }
+        }
+
+        // 3. Still no role? check teachers table
+        if (!profile?.role) {
+          const { data: teacher } = await supabase
+            .from('teachers')
+            .select('*')
+            .eq('id', userId)
+            .single();
+          
+          if (teacher) {
+            profile = { ...profile, ...teacher, role: 'teacher' };
+          }
+        }
         
-        if (isMounted && profile) {
+        if (isMounted && profile?.role) {
           setCurrentUser(profile);
           localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(profile));
         }
       } catch (err) {
         console.error('Profile sync error:', err);
-        if (isMounted) {
-          // If profile fetch fails, we might still have the user from localStorage
-          // but we shouldn't force a logout yet unless it's a 404
-        }
       } finally {
         if (isMounted) setAuthLoading(false);
       }
@@ -151,7 +172,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       setLoading(true);
       try {
-        // Parallel fetch for speed
+        // Parallel fetch for speed with error tolerance
         const [
           profilesRes,
           studentsRes,
@@ -159,7 +180,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           batchesRes,
           announcementsRes,
           examsRes,
-          attendanceRes
+          attendanceRes,
+          feePaymentsRes
         ] = await Promise.all([
           supabase.from('profiles').select('*'),
           supabase.from('students').select('*'),
@@ -167,14 +189,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           supabase.from('batches').select('*'),
           supabase.from('announcements').select('*').order('created_at', { ascending: false }),
           supabase.from('exams').select('*').order('scheduled_at', { ascending: false }),
-          supabase.from('attendance').select('*')
+          supabase.from('attendance').select('*'),
+          supabase.from('fee_payments').select('*').order('date', { ascending: false })
         ]);
 
         if (!isMounted) return;
 
         const profiles = profilesRes.data || [];
         
-        // 1. Format Students
+        // 1. Format Students (Only if data available)
         if (studentsRes.data) {
           const formatted: Student[] = studentsRes.data.map(s => {
             const p = profiles.find(prof => prof.id === s.id) || {};
@@ -201,7 +224,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setStudents(formatted);
         }
 
-        // 2. Format Teachers
+        // 2. Format Teachers (Only if data available)
         if (teachersRes.data) {
           const formatted: Teacher[] = teachersRes.data.map(t => {
             const p = profiles.find(prof => prof.id === t.id) || {};
@@ -220,7 +243,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setTeachers(formatted);
         }
 
-        // 3. Format Batches
+        // 3. Format Batches (Only if data available)
         if (batchesRes.data) {
           setBatches(batchesRes.data.map(b => ({
             ...b,
@@ -229,7 +252,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           })));
         }
 
-        // 4. Format Announcements
+        // 4. Format Announcements (Available to all roles)
         if (announcementsRes.data) {
           setAnnouncements(announcementsRes.data.map(a => ({
             ...a,
@@ -242,7 +265,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           })));
         }
 
-        // 5. Format Exams
+        // 5. Format Exams (Available to all roles, but RLS will filter rows)
         if (examsRes.data) {
           setExams(examsRes.data.map(e => ({
             ...e,
@@ -254,7 +277,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           })));
         }
 
-        // 6. Format Attendance
+        // 6. Format Attendance (RLS will filter)
         if (attendanceRes.data) {
           setAttendance(attendanceRes.data.map(at => ({
             ...at,
@@ -263,10 +286,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           })));
         }
 
-        // Fetch Fee Payments
-        const { data: feeData } = await supabase.from('fee_payments').select('*').order('date', { ascending: false });
-        if (isMounted && feeData) {
-          setFeePayments(feeData.map(p => ({
+        // 7. Format Fee Payments (RLS will filter)
+        if (feePaymentsRes.data) {
+          setFeePayments(feePaymentsRes.data.map(p => ({
             ...p,
             studentId: p.student_id,
             receiptNo: p.receipt_no
@@ -274,7 +296,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
 
       } catch (err) {
-        console.error('Error fetching data from Supabase:', err);
+        console.error('Critical data fetch error:', err);
       } finally {
         if (isMounted) setLoading(false);
       }
@@ -419,13 +441,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (error) throw error;
 
       // Force profile fetch to ensure user is valid in our DB
-      const { data: profile, error: profileError } = await supabase
+      let { data: profile } = await supabase
         .from('profiles')
         .select('*')
         .eq('id', data.user.id)
         .single();
 
-      if (profileError || !profile) {
+      // Fallback: Check Students table
+      if (!profile?.role) {
+        const { data: student } = await supabase.from('students').select('*').eq('id', data.user.id).single();
+        if (student) profile = { ...profile, ...student, role: 'student' };
+      }
+
+      // Fallback: Check Teachers table
+      if (!profile?.role) {
+        const { data: teacher } = await supabase.from('teachers').select('*').eq('id', data.user.id).single();
+        if (teacher) profile = { ...profile, ...teacher, role: 'teacher' };
+      }
+
+      if (!profile?.role) {
         await supabase.auth.signOut();
         return false;
       }
