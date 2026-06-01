@@ -464,36 +464,54 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       localStorage.removeItem(STORAGE_KEYS.USER);
       const cleanEmail = email.toLowerCase().trim();
       
-      // 1. Try Supabase Auth First (for Admin and Auth-enabled users)
-      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
-        email: cleanEmail,
-        password: password,
-      });
+      // 1. Find the user profile by email first to determine their role
+      const { data: profile, error: profileError } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('email', cleanEmail)
+        .maybeSingle();
+
+      if (profileError || !profile) {
+        console.error('Login: No profile found for this email');
+        return false;
+      }
+
+      const role = profile.role?.toLowerCase();
+
+      // 2. Handle login based on the assigned role
       
-      if (!authError && authData.user) {
-        const { data: profile } = await supabase
-          .from('profiles')
+      // ADMIN ROLE: Must use Supabase Auth for security
+      if (role === 'admin') {
+        if (profile.email !== MASTER_ADMIN_EMAIL) {
+          console.error('Unauthorized Admin attempt');
+          return false;
+        }
+        const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+          email: cleanEmail,
+          password: password,
+        });
+        if (authError || !authData.user) return false;
+        
+        const user = { ...profile, id: authData.user.id };
+        setCurrentUser(user);
+        localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
+        setActiveTab('dashboard');
+        return true;
+      }
+
+      // STUDENT ROLE: Check password in students table
+      if (role === 'student') {
+        const { data: studentData, error: studentError } = await supabase
+          .from('students')
           .select('*')
-          .eq('id', authData.user.id)
+          .eq('id', profile.id)
           .maybeSingle();
 
-        let user = profile || { id: authData.user.id, email: cleanEmail };
-        
-        // Fallback role checks for Auth users
-        if (!user.role) {
-          const { data: s } = await supabase.from('students').select('*').eq('id', authData.user.id).maybeSingle();
-          if (s) user = { ...user, ...s, role: 'student' };
-          else {
-            const { data: t } = await supabase.from('teachers').select('*').eq('id', authData.user.id).maybeSingle();
-            if (t) user = { ...user, ...t, role: 'teacher' };
-          }
-        }
+        if (studentError || !studentData) return false;
 
-        if (user.role) {
-          if (user.role === 'admin' && user.email !== MASTER_ADMIN_EMAIL) {
-            await supabase.auth.signOut();
-            return false;
-          }
+        // Verify password (Exact match as stored by Admin)
+        if (studentData.password === password) {
+          const user = { ...profile, ...studentData, role: 'student' };
           setCurrentUser(user);
           localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
           setActiveTab('dashboard');
@@ -501,38 +519,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       }
 
-      // 2. HIGHLY ROBUST FALLBACK: Manual Database Check
-      // This handles Students/Teachers created by Admin who are NOT in Supabase Auth
-      
-      // Check Students Table
-      const { data: studentMatch } = await supabase
-        .from('students')
-        .select('*')
-        .eq('password', password) // Exact password match
-        .maybeSingle();
+      // TEACHER ROLE: Check password in teachers table
+      if (role === 'teacher') {
+        const { data: teacherData, error: teacherError } = await supabase
+          .from('teachers')
+          .select('*')
+          .eq('id', profile.id)
+          .maybeSingle();
 
-      if (studentMatch) {
-        const { data: profile } = await supabase.from('profiles').select('*').eq('id', studentMatch.id).maybeSingle();
-        if (profile && profile.email.toLowerCase().trim() === cleanEmail) {
-          const user = { ...profile, ...studentMatch, role: 'student' };
-          setCurrentUser(user);
-          localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
-          setActiveTab('dashboard');
-          return true;
-        }
-      }
+        if (teacherError || !teacherData) return false;
 
-      // Check Teachers Table
-      const { data: teacherMatch } = await supabase
-        .from('teachers')
-        .select('*')
-        .eq('password', password)
-        .maybeSingle();
-
-      if (teacherMatch) {
-        const { data: profile } = await supabase.from('profiles').select('*').eq('id', teacherMatch.id).maybeSingle();
-        if (profile && profile.email.toLowerCase().trim() === cleanEmail) {
-          const user = { ...profile, ...teacherMatch, role: 'teacher' };
+        // Verify password
+        if (teacherData.password === password) {
+          const user = { ...profile, ...teacherData, role: 'teacher' };
           setCurrentUser(user);
           localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
           setActiveTab('dashboard');
