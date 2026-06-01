@@ -1,6 +1,13 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import { User, Student, Teacher, Batch, AttendanceRecord, Exam, ExamResult, FeePayment, Announcement, StudyMaterial } from '../types';
 import { supabase } from '../lib/supabase';
+import {
+  type AcademySessionUser,
+  type LoginResult,
+  normalizeEmail,
+  performAcademyLogin,
+  restoreAcademyUserById,
+} from '../lib/auth';
 import { usePWA } from '../hooks/usePWA';
 
 const STORAGE_KEYS = {
@@ -35,7 +42,7 @@ interface AppContextType {
   setAnnouncements: React.Dispatch<React.SetStateAction<Announcement[]>>;
   studyMaterials: StudyMaterial[];
   setStudyMaterials: React.Dispatch<React.SetStateAction<StudyMaterial[]>>;
-  login: (email: string, password: string) => Promise<boolean>;
+  login: (email: string, password: string) => Promise<LoginResult>;
   logout: () => void;
   activeTab: string;
   setActiveTab: (tab: string) => void;
@@ -135,36 +142,56 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     };
 
+    const parseCachedUser = (): AcademySessionUser | null => {
+      const saved = localStorage.getItem(STORAGE_KEYS.USER);
+      if (!saved) return null;
+      try {
+        return JSON.parse(saved) as AcademySessionUser;
+      } catch {
+        return null;
+      }
+    };
+
     const initAuth = async () => {
       const { data: { session } } = await supabase.auth.getSession();
-      
-      if (session?.user) {
-        await syncProfile(session.user.id);
-      } else {
-        // ROBUST CHECK: If no Supabase session, check if we have a manually logged in user
-        const saved = localStorage.getItem(STORAGE_KEYS.USER);
-        if (saved) {
-          try {
-            const cachedUser = JSON.parse(saved);
-            // Verify the cached user still exists in their respective table
-            const table = cachedUser.role === 'student' ? 'students' : (cachedUser.role === 'teacher' ? 'teachers' : 'profiles');
-            const { data: verify } = await supabase.from(table).select('id').eq('id', cachedUser.id).maybeSingle();
-            
-            if (verify && isMounted) {
-              setCurrentUser(cachedUser);
-              setAuthLoading(false);
-              return;
-            }
-          } catch (e) {
-            console.error('Cache verification failed', e);
-          }
+      const cachedUser = parseCachedUser();
+      const cachedRole = cachedUser?.role?.toString().toLowerCase();
+
+      // Student/teacher sessions are stored locally (not Supabase Auth)
+      if (cachedRole === 'student' || cachedRole === 'teacher') {
+        if (session) {
+          await supabase.auth.signOut();
         }
-        
+
+        const restored = await restoreAcademyUserById(
+          cachedUser!.id,
+          cachedRole as 'student' | 'teacher'
+        );
+
         if (isMounted) {
-          setCurrentUser(null);
-          localStorage.removeItem(STORAGE_KEYS.USER);
+          if (restored) {
+            setCurrentUser(restored);
+            localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(restored));
+          } else if (cachedUser) {
+            setCurrentUser(cachedUser);
+          } else {
+            setCurrentUser(null);
+            localStorage.removeItem(STORAGE_KEYS.USER);
+          }
           setAuthLoading(false);
         }
+        return;
+      }
+
+      if (session?.user) {
+        await syncProfile(session.user.id);
+        return;
+      }
+
+      if (isMounted) {
+        setCurrentUser(null);
+        localStorage.removeItem(STORAGE_KEYS.USER);
+        setAuthLoading(false);
       }
     };
 
@@ -176,9 +203,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (event === 'SIGNED_IN' && session?.user) {
         await syncProfile(session.user.id);
       } else if (event === 'SIGNED_OUT') {
-        setCurrentUser(null);
-        localStorage.removeItem(STORAGE_KEYS.USER);
-        setAuthLoading(false);
+        const cached = parseCachedUser();
+        const cachedRole = cached?.role?.toString().toLowerCase();
+        if (cachedRole === 'student' || cachedRole === 'teacher') {
+          if (isMounted) setAuthLoading(false);
+          return;
+        }
+        if (isMounted) {
+          setCurrentUser(null);
+          localStorage.removeItem(STORAGE_KEYS.USER);
+          setAuthLoading(false);
+        }
       }
     });
 
@@ -459,90 +494,59 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [currentUser]);
 
-  const login = useCallback(async (email: string, password: string): Promise<boolean> => {
+  const login = useCallback(async (email: string, password: string): Promise<LoginResult> => {
     try {
-      localStorage.removeItem(STORAGE_KEYS.USER);
-      const cleanEmail = email.toLowerCase().trim();
-      
-      // 1. Find the user profile by email first to determine their role
-      const { data: profile, error: profileError } = await supabase
+      const cleanEmail = normalizeEmail(email);
+
+      const { data: profile } = await supabase
         .from('profiles')
-        .select('*')
-        .eq('email', cleanEmail)
+        .select('id, name, email, phone, role')
+        .ilike('email', cleanEmail)
         .maybeSingle();
 
-      if (profileError || !profile) {
-        console.error('Login: No profile found for this email');
-        return false;
-      }
+      const profileRole = profile?.role?.toLowerCase();
 
-      const role = profile.role?.toLowerCase();
-
-      // 2. Handle login based on the assigned role
-      
-      // ADMIN ROLE: Must use Supabase Auth for security
-      if (role === 'admin') {
-        if (profile.email !== MASTER_ADMIN_EMAIL) {
-          console.error('Unauthorized Admin attempt');
-          return false;
+      if (profileRole === 'admin') {
+        if (profile?.email?.toLowerCase() !== MASTER_ADMIN_EMAIL) {
+          return { ok: false, reason: 'Unauthorized admin access.' };
         }
+
+        await supabase.auth.signOut();
+
         const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
           email: cleanEmail,
-          password: password,
+          password,
         });
-        if (authError || !authData.user) return false;
-        
-        const user = { ...profile, id: authData.user.id };
+
+        if (authError || !authData.user) {
+          const message =
+            authError?.message?.includes('Invalid login credentials')
+              ? 'Incorrect email or password. Please try again.'
+              : 'Admin sign-in failed. Please try again.';
+          return { ok: false, reason: message };
+        }
+
+        const user = { ...profile, id: authData.user.id, role: 'admin' as const };
         setCurrentUser(user);
         localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
         setActiveTab('dashboard');
-        return true;
+        return { ok: true, user };
       }
 
-      // STUDENT ROLE: Check password in students table
-      if (role === 'student') {
-        const { data: studentData, error: studentError } = await supabase
-          .from('students')
-          .select('*')
-          .eq('id', profile.id)
-          .maybeSingle();
+      await supabase.auth.signOut();
 
-        if (studentError || !studentData) return false;
-
-        // Verify password (Exact match as stored by Admin)
-        if (studentData.password === password) {
-          const user = { ...profile, ...studentData, role: 'student' };
-          setCurrentUser(user);
-          localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
-          setActiveTab('dashboard');
-          return true;
-        }
+      const academyResult = await performAcademyLogin(cleanEmail, password);
+      if (!academyResult.ok) {
+        return academyResult;
       }
 
-      // TEACHER ROLE: Check password in teachers table
-      if (role === 'teacher') {
-        const { data: teacherData, error: teacherError } = await supabase
-          .from('teachers')
-          .select('*')
-          .eq('id', profile.id)
-          .maybeSingle();
-
-        if (teacherError || !teacherData) return false;
-
-        // Verify password
-        if (teacherData.password === password) {
-          const user = { ...profile, ...teacherData, role: 'teacher' };
-          setCurrentUser(user);
-          localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
-          setActiveTab('dashboard');
-          return true;
-        }
-      }
-
-      return false;
+      setCurrentUser(academyResult.user);
+      localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(academyResult.user));
+      setActiveTab('dashboard');
+      return academyResult;
     } catch (err) {
       console.error('Unified Login Error:', err);
-      return false;
+      return { ok: false, reason: 'Login failed due to a connection or server error. Please try again.' };
     }
   }, []);
 

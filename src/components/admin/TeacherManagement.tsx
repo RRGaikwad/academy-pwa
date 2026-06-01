@@ -5,6 +5,7 @@ import { Badge } from '../shared/Badge';
 import { Modal } from '../shared/Modal';
 import { PageHeader } from '../shared/PageHeader';
 import { supabase } from '../../lib/supabase';
+import { normalizeEmail } from '../../lib/auth';
 import { Plus, Edit2, Trash2, Eye, Search, Users } from 'lucide-react';
 
 const defaultTeacher: Omit<Teacher, 'id' | 'role'> = {
@@ -64,7 +65,11 @@ export const TeacherManagement: React.FC = () => {
   const handleSave = async () => {
     if (!editTeacher) return;
     const teacher = editTeacher as Teacher;
-    
+
+    if (teacher.email) {
+      teacher.email = normalizeEmail(teacher.email);
+    }
+
     try {
       if (isEditing) {
         // 1. Update Profile

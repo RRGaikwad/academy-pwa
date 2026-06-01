@@ -5,6 +5,7 @@ import { Badge } from '../shared/Badge';
 import { Modal } from '../shared/Modal';
 import { PageHeader } from '../shared/PageHeader';
 import { supabase } from '../../lib/supabase';
+import { normalizeEmail } from '../../lib/auth';
 import {
   Plus, Search, Edit2, Trash2, Eye,
   GraduationCap, ChevronDown
@@ -97,6 +98,8 @@ export const StudentManagement: React.FC = () => {
       alert('Please fill all required fields');
       return;
     }
+
+    student.email = normalizeEmail(student.email);
 
     // Auto assign subjects
     if (student.stream === 'PCM') student.subjects = ['Physics', 'Chemistry', 'Mathematics'];
