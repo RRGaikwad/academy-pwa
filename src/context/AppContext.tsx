@@ -509,6 +509,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const cleanEmail = normalizeEmail(email);
       const cleanPassword = normalizePassword(password);
 
+      // 1. Check if this is the Master Admin attempting login
+      const isMasterAdmin = cleanEmail === MASTER_ADMIN_EMAIL.toLowerCase();
+
+      // 2. Fetch profile if it exists
       const { data: profile } = await supabase
         .from('profiles')
         .select('id, name, email, phone, role')
@@ -517,12 +521,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       const profileRole = profile?.role?.toLowerCase();
 
-      if (profileRole === 'admin') {
-        if (profile?.email?.toLowerCase() !== MASTER_ADMIN_EMAIL) {
-          return { ok: false, reason: 'Unauthorized admin access.' };
+      // 3. Handle Admin Login (Always use Supabase Auth for Admin)
+      if (isMasterAdmin || profileRole === 'admin') {
+        // If it's a profile-based admin but not the master email, block it for safety
+        if (profileRole === 'admin' && cleanEmail !== MASTER_ADMIN_EMAIL.toLowerCase()) {
+          return { ok: false, reason: 'Unauthorized admin access attempt.' };
         }
-
-        await supabase.auth.signOut();
 
         const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
           email: cleanEmail,
@@ -533,19 +537,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const message =
             authError?.message?.includes('Invalid login credentials')
               ? 'Incorrect email or password. Please try again.'
-              : 'Admin sign-in failed. Please try again.';
+              : 'Admin sign-in failed. Please check your Supabase Auth dashboard.';
           return { ok: false, reason: message };
         }
 
-        const user = { ...profile, id: authData.user.id, role: 'admin' as const };
+        // Ensure a profile exists for the Master Admin
+        let adminUser = profile;
+        if (!adminUser) {
+          // Auto-create profile for Master Admin if it doesn't exist
+          const { data: newProfile } = await supabase
+            .from('profiles')
+            .upsert({
+              id: authData.user.id,
+              email: cleanEmail,
+              name: 'Master Admin',
+              role: 'admin'
+            })
+            .select()
+            .single();
+          adminUser = newProfile;
+        }
+
+        const user: AcademySessionUser = {
+          id: authData.user.id,
+          name: adminUser?.name || 'Master Admin',
+          email: adminUser?.email || cleanEmail,
+          phone: adminUser?.phone || '',
+          role: 'admin'
+        };
         setCurrentUser(user);
         localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
         setActiveTab('dashboard');
         return { ok: true, user };
       }
 
-      await supabase.auth.signOut();
-
+      // 4. Handle Student/Teacher Login (Direct Database Check)
       const academyResult = await performAcademyLogin(cleanEmail, cleanPassword);
       if (!academyResult.ok) {
         return academyResult;
