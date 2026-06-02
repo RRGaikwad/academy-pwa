@@ -159,37 +159,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const cachedUser = parseCachedUser();
       const cachedRole = cachedUser?.role?.toString().toLowerCase();
 
-      // Student/teacher sessions are stored locally (not Supabase Auth)
-      if (cachedRole === 'student' || cachedRole === 'teacher') {
-        if (session) {
-          await supabase.auth.signOut();
-        }
-
-        const restored = await restoreAcademyUserById(
-          cachedUser!.id,
-          cachedRole as 'student' | 'teacher'
-        );
-
-        if (isMounted) {
-          if (restored) {
-            setCurrentUser(restored);
-            localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(restored));
-          } else if (cachedUser) {
-            setCurrentUser(cachedUser);
-          } else {
-            setCurrentUser(null);
-            localStorage.removeItem(STORAGE_KEYS.USER);
-          }
-          setAuthLoading(false);
-        }
-        return;
-      }
-
+      // Priority 1: Supabase Session (The most secure/standard way)
       if (session?.user) {
         await syncProfile(session.user.id);
         return;
       }
 
+      // Priority 2: Manual Session Recovery (For Students, Teachers, and Fallback Admins)
+      if (cachedUser?.id) {
+        if (cachedRole === 'student' || cachedRole === 'teacher') {
+          const restored = await restoreAcademyUserById(
+            cachedUser.id,
+            cachedRole as 'student' | 'teacher'
+          );
+          if (isMounted) {
+            if (restored) {
+              setCurrentUser(restored);
+              localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(restored));
+            } else {
+              setCurrentUser(cachedUser); // Keep cached if restore fails but we have ID
+            }
+            setAuthLoading(false);
+          }
+          return;
+        }
+
+        if (cachedRole === 'admin') {
+          // Verify Admin profile still exists
+          const { data: verifyAdmin } = await supabase.from('profiles').select('id').eq('id', cachedUser.id).eq('role', 'admin').maybeSingle();
+          if (verifyAdmin && isMounted) {
+            setCurrentUser(cachedUser);
+            setAuthLoading(false);
+            return;
+          }
+        }
+      }
+
+      // Fallback: Clear everything
       if (isMounted) {
         setCurrentUser(null);
         localStorage.removeItem(STORAGE_KEYS.USER);
@@ -498,80 +504,66 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const login = useCallback(async (email: string, password: string): Promise<LoginResult> => {
     try {
+      localStorage.removeItem(STORAGE_KEYS.USER);
       if (!isSupabaseConfigured()) {
-        return {
-          ok: false,
-          reason:
-            'App is not connected to Supabase. Add your Project URL and anon key to `.env`, then restart the dev server.',
-        };
+        return { ok: false, reason: 'Supabase not configured.' };
       }
 
       const cleanEmail = normalizeEmail(email);
       const cleanPassword = normalizePassword(password);
 
-      // 1. Check if this is the Master Admin attempting login
-      const isMasterAdmin = cleanEmail === MASTER_ADMIN_EMAIL.toLowerCase();
-
-      // 2. Fetch profile if it exists
-      const { data: profile } = await supabase
+      // 1. Fetch profile by email to determine role and get the stored password
+      const { data: profile, error: profileError } = await supabase
         .from('profiles')
-        .select('id, name, email, phone, role')
+        .select('id, name, email, phone, role, password')
         .ilike('email', cleanEmail)
         .maybeSingle();
 
-      const profileRole = profile?.role?.toLowerCase();
+      if (profileError) {
+        console.error('Profile lookup error:', profileError);
+        return { ok: false, reason: 'Database connection error. Please try again.' };
+      }
 
-      // 3. Handle Admin Login (Always use Supabase Auth for Admin)
-      if (isMasterAdmin || profileRole === 'admin') {
-        // If it's a profile-based admin but not the master email, block it for safety
-        if (profileRole === 'admin' && cleanEmail !== MASTER_ADMIN_EMAIL.toLowerCase()) {
+      if (!profile) {
+        return { ok: false, reason: 'Account not found. Please contact the administrator.' };
+      }
+
+      const role = profile.role?.toLowerCase();
+
+      // 2. Handle ADMIN Login
+      if (role === 'admin') {
+        if (cleanEmail !== MASTER_ADMIN_EMAIL.toLowerCase()) {
           return { ok: false, reason: 'Unauthorized admin access attempt.' };
         }
 
+        // Try Supabase Auth first (Standard)
         const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
           email: cleanEmail,
           password: cleanPassword,
         });
 
-        if (authError || !authData.user) {
-          const message =
-            authError?.message?.includes('Invalid login credentials')
-              ? 'Incorrect email or password. Please try again.'
-              : 'Admin sign-in failed. Please check your Supabase Auth dashboard.';
-          return { ok: false, reason: message };
-        }
-
-        // Ensure a profile exists for the Master Admin
-        let adminUser = profile;
-        if (!adminUser) {
-          // Auto-create profile for Master Admin if it doesn't exist
-          const { data: newProfile } = await supabase
-            .from('profiles')
-            .upsert({
-              id: authData.user.id,
-              email: cleanEmail,
-              name: 'Master Admin',
-              role: 'admin'
-            })
-            .select()
-            .single();
-          adminUser = newProfile;
+        // FALLBACK: If Supabase Auth fails, check the password column in the profiles table directly
+        const isDbPasswordMatch = profile.password === password || profile.password === cleanPassword;
+        
+        if (authError && !isDbPasswordMatch) {
+          return { ok: false, reason: 'Incorrect admin password. Please check your credentials.' };
         }
 
         const user: AcademySessionUser = {
-          id: authData.user.id,
-          name: adminUser?.name || 'Master Admin',
-          email: adminUser?.email || cleanEmail,
-          phone: adminUser?.phone || '',
+          id: authData?.user?.id || profile.id,
+          name: profile.name || 'Master Admin',
+          email: profile.email || cleanEmail,
+          phone: profile.phone || '',
           role: 'admin'
         };
+
         setCurrentUser(user);
         localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
         setActiveTab('dashboard');
         return { ok: true, user };
       }
 
-      // 4. Handle Student/Teacher Login (Direct Database Check)
+      // 3. Handle STUDENT/TEACHER Login (Uses performAcademyLogin which checks respective tables)
       const academyResult = await performAcademyLogin(cleanEmail, cleanPassword);
       if (!academyResult.ok) {
         return academyResult;
@@ -583,7 +575,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return academyResult;
     } catch (err) {
       console.error('Unified Login Error:', err);
-      return { ok: false, reason: 'Login failed due to a connection or server error. Please try again.' };
+      return { ok: false, reason: 'An unexpected error occurred. Please try again.' };
     }
   }, []);
 
