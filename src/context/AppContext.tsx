@@ -5,6 +5,8 @@ import {
   type AcademySessionUser,
   type LoginResult,
   authenticateAdminUser,
+  lookupProfileById,
+  lookupProfileForLogin,
   normalizeEmail,
   performAcademyLogin,
   restoreAcademyUserById,
@@ -87,24 +89,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const syncProfile = async (userId: string, sessionEmail?: string) => {
       try {
-        // 1. Try to get profile
-        const { data: profileData } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', userId)
-          .maybeSingle();
-
-        let profile = profileData || { id: userId };
+        // 1. Try to get profile (RPC bypasses RLS)
+        const profileById = await lookupProfileById(userId);
+        let profile: Record<string, unknown> = profileById
+          ? { ...profileById }
+          : { id: userId };
 
         // 1b. Supabase Auth UUID may differ from profiles.id — resolve by email
         if (!profile.role && sessionEmail) {
-          const { data: byEmail } = await supabase
-            .from('profiles')
-            .select('*')
-            .ilike('email', normalizeEmail(sessionEmail))
-            .maybeSingle();
+          const byEmail = await lookupProfileForLogin(sessionEmail);
           if (byEmail) {
-            profile = byEmail;
+            profile = { ...byEmail };
           }
         }
 
@@ -134,22 +129,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
         }
         
-        // Ensure role is lowercase for consistency
-        if (profile.role) {
-          profile.role = profile.role.toLowerCase();
-        }
-        
-        if (isMounted && profile.role) {
+        const role = String(profile.role ?? '').toLowerCase();
+        profile.role = role;
+
+        if (isMounted && role) {
           const sessionUser =
-            profile.role === 'admin'
+            role === 'admin'
               ? {
-                  id: profile.id,
-                  name: profile.name || 'Admin',
-                  email: profile.email || '',
-                  phone: profile.phone || '',
+                  id: String(profile.id),
+                  name: String(profile.name || 'Admin'),
+                  email: String(profile.email || ''),
+                  phone: String(profile.phone || ''),
                   role: 'admin' as const,
                 }
-              : profile;
+              : { ...profile, role };
           setCurrentUser(sessionUser);
           localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(sessionUser));
         } else if (isMounted) {
@@ -175,51 +168,62 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     const initAuth = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      const cachedUser = parseCachedUser();
-      const cachedRole = cachedUser?.role?.toString().toLowerCase();
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        const cachedUser = parseCachedUser();
+        const cachedRole = cachedUser?.role?.toString().toLowerCase();
 
-      // Priority 1: Supabase Session (The most secure/standard way)
-      if (session?.user) {
-        await syncProfile(session.user.id, session.user.email);
-        return;
-      }
-
-      // Priority 2: Manual Session Recovery (For Students, Teachers, and Fallback Admins)
-      if (cachedUser?.id) {
-        if (cachedRole === 'student' || cachedRole === 'teacher') {
-          const restored = await restoreAcademyUserById(
-            cachedUser.id,
-            cachedRole as 'student' | 'teacher'
-          );
-          if (isMounted) {
-            if (restored) {
-              setCurrentUser(restored);
-              localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(restored));
-            } else {
-              setCurrentUser(cachedUser); // Keep cached if restore fails but we have ID
-            }
-            setAuthLoading(false);
-          }
+        // Priority 1: Supabase Session (The most secure/standard way)
+        if (session?.user) {
+          await syncProfile(session.user.id, session.user.email);
           return;
         }
 
-        if (cachedRole === 'admin') {
-          // Verify Admin profile still exists
-          const { data: verifyAdmin } = await supabase.from('profiles').select('id').eq('id', cachedUser.id).eq('role', 'admin').maybeSingle();
-          if (verifyAdmin && isMounted) {
-            setCurrentUser(cachedUser);
-            setAuthLoading(false);
+        // Priority 2: Manual Session Recovery (For Students, Teachers, and Fallback Admins)
+        if (cachedUser?.id) {
+          if (cachedRole === 'student' || cachedRole === 'teacher') {
+            const restored = await restoreAcademyUserById(
+              cachedUser.id,
+              cachedRole as 'student' | 'teacher'
+            );
+            if (isMounted) {
+              if (restored) {
+                setCurrentUser(restored);
+                localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(restored));
+              } else {
+                setCurrentUser(cachedUser);
+              }
+            }
             return;
           }
-        }
-      }
 
-      // Fallback: Clear everything
-      if (isMounted) {
-        setCurrentUser(null);
-        localStorage.removeItem(STORAGE_KEYS.USER);
-        setAuthLoading(false);
+          if (cachedRole === 'admin') {
+            const verifyAdmin = await lookupProfileById(cachedUser.id);
+            if (verifyAdmin?.role?.toLowerCase() === 'admin' && isMounted) {
+              setCurrentUser({
+                id: verifyAdmin.id,
+                name: verifyAdmin.name || 'Admin',
+                email: verifyAdmin.email || '',
+                phone: verifyAdmin.phone ?? '',
+                role: 'admin',
+              });
+              return;
+            }
+          }
+        }
+
+        if (isMounted) {
+          setCurrentUser(null);
+          localStorage.removeItem(STORAGE_KEYS.USER);
+        }
+      } catch (err) {
+        console.error('Auth init error:', err);
+        if (isMounted) {
+          setCurrentUser(null);
+          localStorage.removeItem(STORAGE_KEYS.USER);
+        }
+      } finally {
+        if (isMounted) setAuthLoading(false);
       }
     };
 
@@ -532,20 +536,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const cleanEmail = normalizeEmail(email);
       const cleanPassword = password.trim();
 
-      // 1. Fetch profile by email to determine role and get the stored password
-      const { data: profile, error: profileError } = await supabase
-        .from('profiles')
-        .select('id, name, email, phone, role, password')
-        .ilike('email', cleanEmail)
-        .maybeSingle();
-
-      if (profileError) {
-        console.error('Profile lookup error:', profileError);
-        return { ok: false, reason: 'Database connection error. Please try again.' };
-      }
+      // 1. Fetch profile by email (RPC bypasses RLS on profiles)
+      const profile = await lookupProfileForLogin(cleanEmail);
 
       if (!profile) {
-        return { ok: false, reason: 'Account not found. Please contact the administrator.' };
+        return {
+          ok: false,
+          reason:
+            'Account not found. Ensure your admin row exists in Supabase profiles (role = admin) and run the latest SQL migration (lookup_profile_for_login).',
+        };
       }
 
       const role = profile.role?.toLowerCase();

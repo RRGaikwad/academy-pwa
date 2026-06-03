@@ -41,7 +41,7 @@ const AppContent = () => {
   }
 
   const renderContent = () => {
-    const { role } = currentUser;
+    const role = String(currentUser.role ?? '').toLowerCase();
 
     // Admin routes
     if (role === 'admin') {

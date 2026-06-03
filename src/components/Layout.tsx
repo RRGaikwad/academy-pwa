@@ -33,7 +33,8 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
   const { currentUser, logout, activeTab, setActiveTab, announcements } = useApp();
   const [drawerOpen, setDrawerOpen] = useState(false);
 
-  const userNav = navItems.filter(n => n.roles.includes(currentUser?.role || ''));
+  const userRole = String(currentUser?.role ?? '').toLowerCase();
+  const userNav = navItems.filter(n => n.roles.includes(userRole));
   const unreadCount = announcements.filter(a => a.targetRole === 'all' || a.targetRole === 'students').length;
 
   const roleColors: Record<string, string> = {
@@ -59,7 +60,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
     return (
       <div className="flex flex-col h-full bg-white">
         {/* Drawer Header */}
-        <div className={`bg-gradient-to-br ${roleColors[currentUser?.role || 'student']} p-5 text-white`}>
+        <div className={`bg-gradient-to-br ${roleColors[userRole] || roleColors.student} p-5 text-white`}>
           <div className="flex items-start justify-between mb-4">
             <div>
               <div className="text-2xl font-bold">VidyaSphere</div>
@@ -76,7 +77,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
             </div>
             <div>
               <p className="font-semibold text-white">{currentUser?.name}</p>
-              <p className="text-white/70 text-xs">{roleLabels[currentUser?.role || '']}</p>
+              <p className="text-white/70 text-xs">{roleLabels[userRole] || ''}</p>
               <p className="text-white/60 text-xs mt-0.5">{currentUser?.email}</p>
             </div>
           </div>

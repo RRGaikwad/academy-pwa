@@ -53,6 +53,69 @@ type TeacherRow = Record<string, unknown> & {
   password?: string;
 };
 
+const mapRpcProfileRow = (payload: Record<string, unknown>): ProfileRow | null => {
+  if (!payload.id) return null;
+  return {
+    id: String(payload.id),
+    name: String(payload.name ?? ''),
+    email: String(payload.email ?? ''),
+    phone: (payload.phone as string | null) ?? null,
+    role: String(payload.role ?? ''),
+    password: (payload.password as string | null) ?? null,
+  };
+};
+
+const isMissingRpcFunction = (message: string): boolean =>
+  message.includes('Could not find the function') || message.includes('does not exist');
+
+export const lookupProfileForLogin = async (email: string): Promise<ProfileRow | null> => {
+  const cleanEmail = normalizeEmail(email);
+
+  const { data: rpcData, error: rpcError } = await supabase.rpc('lookup_profile_for_login', {
+    p_email: cleanEmail,
+  });
+
+  if (!rpcError) {
+    const payload = parseRpcPayload(rpcData);
+    if (payload) {
+      const profile = mapRpcProfileRow(payload);
+      if (profile) return profile;
+    }
+  } else if (!isMissingRpcFunction(rpcError.message)) {
+    console.warn('RPC lookup_profile_for_login:', rpcError.message);
+  }
+
+  return findProfileByEmailDirect(cleanEmail);
+};
+
+export const lookupProfileById = async (userId: string): Promise<ProfileRow | null> => {
+  const { data: rpcData, error: rpcError } = await supabase.rpc('lookup_profile_by_id', {
+    p_user_id: userId,
+  });
+
+  if (!rpcError) {
+    const payload = parseRpcPayload(rpcData);
+    if (payload) {
+      const profile = mapRpcProfileRow(payload);
+      if (profile) return profile;
+    }
+  } else if (!isMissingRpcFunction(rpcError.message)) {
+    console.warn('RPC lookup_profile_by_id:', rpcError.message);
+  }
+
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('id, name, email, phone, role, password')
+    .eq('id', userId)
+    .maybeSingle();
+
+  if (error) {
+    console.warn('Profile lookup by id failed:', error.message);
+    return null;
+  }
+  return data as ProfileRow | null;
+};
+
 const parseRpcPayload = (data: unknown): Record<string, unknown> | null => {
   if (data == null) return null;
   if (typeof data === 'string') {
@@ -157,7 +220,7 @@ const passwordsMatch = (
   return candidates.some((v) => v.trim() === normalized);
 };
 
-async function findProfileByEmail(email: string): Promise<ProfileRow | null> {
+async function findProfileByEmailDirect(email: string): Promise<ProfileRow | null> {
   const { data, error } = await supabase
     .from('profiles')
     .select('id, name, email, phone, role, password')
@@ -169,6 +232,10 @@ async function findProfileByEmail(email: string): Promise<ProfileRow | null> {
     return null;
   }
   return data as ProfileRow | null;
+}
+
+async function findProfileByEmail(email: string): Promise<ProfileRow | null> {
+  return lookupProfileForLogin(email);
 }
 
 async function resolveRole(profile: ProfileRow): Promise<'student' | 'teacher' | 'admin' | null> {
