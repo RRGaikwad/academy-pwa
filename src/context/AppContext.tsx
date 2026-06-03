@@ -4,8 +4,8 @@ import { supabase } from '../lib/supabase';
 import {
   type AcademySessionUser,
   type LoginResult,
+  authenticateAdminUser,
   normalizeEmail,
-  normalizePassword,
   performAcademyLogin,
   restoreAcademyUserById,
 } from '../lib/auth';
@@ -56,8 +56,6 @@ interface AppContextType {
 
 const AppContext = createContext<AppContextType | null>(null);
 
-const MASTER_ADMIN_EMAIL = 'gaikwadrohan8005@gmail.com';
-
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { isInstallable, installApp } = usePWA();
   const [currentUser, setCurrentUser] = useState<(User & any) | null>(() => {
@@ -87,7 +85,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     let isMounted = true;
 
-    const syncProfile = async (userId: string) => {
+    const syncProfile = async (userId: string, sessionEmail?: string) => {
       try {
         // 1. Try to get profile
         const { data: profileData } = await supabase
@@ -97,6 +95,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           .maybeSingle();
 
         let profile = profileData || { id: userId };
+
+        // 1b. Supabase Auth UUID may differ from profiles.id — resolve by email
+        if (!profile.role && sessionEmail) {
+          const { data: byEmail } = await supabase
+            .from('profiles')
+            .select('*')
+            .ilike('email', normalizeEmail(sessionEmail))
+            .maybeSingle();
+          if (byEmail) {
+            profile = byEmail;
+          }
+        }
 
         // 2. If no role in profile, check students table
         if (!profile.role) {
@@ -130,8 +140,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
         
         if (isMounted && profile.role) {
-          setCurrentUser(profile);
-          localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(profile));
+          const sessionUser =
+            profile.role === 'admin'
+              ? {
+                  id: profile.id,
+                  name: profile.name || 'Admin',
+                  email: profile.email || '',
+                  phone: profile.phone || '',
+                  role: 'admin' as const,
+                }
+              : profile;
+          setCurrentUser(sessionUser);
+          localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(sessionUser));
         } else if (isMounted) {
           console.warn('User authenticated but no role found in profiles, students, or teachers');
           setCurrentUser(null);
@@ -161,7 +181,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       // Priority 1: Supabase Session (The most secure/standard way)
       if (session?.user) {
-        await syncProfile(session.user.id);
+        await syncProfile(session.user.id, session.user.email);
         return;
       }
 
@@ -209,7 +229,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (!isMounted) return;
 
       if (event === 'SIGNED_IN' && session?.user) {
-        await syncProfile(session.user.id);
+        await syncProfile(session.user.id, session.user.email);
       } else if (event === 'SIGNED_OUT') {
         const cached = parseCachedUser();
         const cachedRole = cached?.role?.toString().toLowerCase();
@@ -510,7 +530,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       const cleanEmail = normalizeEmail(email);
-      const cleanPassword = normalizePassword(password);
+      const cleanPassword = password.trim();
 
       // 1. Fetch profile by email to determine role and get the stored password
       const { data: profile, error: profileError } = await supabase
@@ -530,37 +550,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       const role = profile.role?.toLowerCase();
 
-      // 2. Handle ADMIN Login
+      // 2. Handle ADMIN Login (any profiles row with role = admin)
       if (role === 'admin') {
-        if (cleanEmail !== MASTER_ADMIN_EMAIL.toLowerCase()) {
-          return { ok: false, reason: 'Unauthorized admin access attempt.' };
+        const adminResult = await authenticateAdminUser(profile, cleanEmail, password);
+        if (!adminResult.ok) {
+          return adminResult;
         }
 
-        // Try Supabase Auth first (Standard)
-        const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
-          email: cleanEmail,
-          password: cleanPassword,
-        });
-
-        // FALLBACK: If Supabase Auth fails, check the password column in the profiles table directly
-        const isDbPasswordMatch = profile.password === password || profile.password === cleanPassword;
-        
-        if (authError && !isDbPasswordMatch) {
-          return { ok: false, reason: 'Incorrect admin password. Please check your credentials.' };
-        }
-
-        const user: AcademySessionUser = {
-          id: authData?.user?.id || profile.id,
-          name: profile.name || 'Master Admin',
-          email: profile.email || cleanEmail,
-          phone: profile.phone || '',
-          role: 'admin'
-        };
-
-        setCurrentUser(user);
-        localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
+        setCurrentUser(adminResult.user);
+        localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(adminResult.user));
         setActiveTab('dashboard');
-        return { ok: true, user };
+        return adminResult;
       }
 
       // 3. Handle STUDENT/TEACHER Login (Uses performAcademyLogin which checks respective tables)

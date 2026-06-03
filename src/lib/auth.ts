@@ -297,6 +297,35 @@ export async function restoreAcademyUserById(
   return mapTeacherSession(profile as ProfileRow, teacher as TeacherRow);
 }
 
+export async function authenticateAdminUser(
+  profile: ProfileRow,
+  email: string,
+  password: string
+): Promise<LoginResult> {
+  const cleanEmail = normalizeEmail(email);
+  const cleanPassword = normalizePassword(password);
+
+  const { error: authError } = await supabase.auth.signInWithPassword({
+    email: cleanEmail,
+    password: cleanPassword,
+  });
+
+  if (authError && !passwordsMatch(profile.password, password)) {
+    return { ok: false, reason: 'Incorrect admin password. Please check your credentials.' };
+  }
+
+  return {
+    ok: true,
+    user: {
+      id: profile.id,
+      name: profile.name || 'Admin',
+      email: profile.email || cleanEmail,
+      phone: profile.phone ?? '',
+      role: 'admin',
+    },
+  };
+}
+
 export async function performAcademyLogin(email: string, password: string): Promise<LoginResult> {
   if (!isSupabaseConfigured()) {
     return {
