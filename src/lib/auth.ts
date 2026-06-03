@@ -68,6 +68,56 @@ const mapRpcProfileRow = (payload: Record<string, unknown>): ProfileRow | null =
 const isMissingRpcFunction = (message: string): boolean =>
   message.includes('Could not find the function') || message.includes('does not exist');
 
+const profileSelectFields = 'id, name, email, phone, role, password';
+
+async function fetchProfileWhileAuthenticated(
+  userId: string,
+  email: string
+): Promise<ProfileRow | null> {
+  const { data: byId } = await supabase
+    .from('profiles')
+    .select(profileSelectFields)
+    .eq('id', userId)
+    .maybeSingle();
+  if (byId) return byId as ProfileRow;
+
+  const cleanEmail = normalizeEmail(email);
+  const { data: byEmail } = await supabase
+    .from('profiles')
+    .select(profileSelectFields)
+    .ilike('email', cleanEmail)
+    .maybeSingle();
+  return (byEmail as ProfileRow | null) ?? null;
+}
+
+async function lookupProfileViaAdminAuthRpc(
+  cleanEmail: string,
+  password: string
+): Promise<ProfileRow | null> {
+  const { data, error } = await supabase.rpc('authenticate_academy_user', {
+    p_email: cleanEmail,
+    p_password: normalizePassword(password),
+  });
+
+  if (error) {
+    if (!isMissingRpcFunction(error.message)) {
+      console.warn('RPC authenticate_academy_user (admin):', error.message);
+    }
+    return null;
+  }
+
+  const payload = parseRpcPayload(data);
+  if (!payload?.id || String(payload.role ?? '').toLowerCase() !== 'admin') {
+    return null;
+  }
+
+  const profile = mapRpcProfileRow(payload);
+  if (!profile) return null;
+
+  const full = await lookupProfileForLogin(cleanEmail);
+  return full ?? profile;
+}
+
 export const lookupProfileForLogin = async (email: string): Promise<ProfileRow | null> => {
   const cleanEmail = normalizeEmail(email);
 
@@ -86,6 +136,42 @@ export const lookupProfileForLogin = async (email: string): Promise<ProfileRow |
   }
 
   return findProfileByEmailDirect(cleanEmail);
+};
+
+/** Resolves a profiles row before login using RPC, Auth session, or admin password RPC. */
+export const resolveProfileForLogin = async (
+  email: string,
+  password: string
+): Promise<ProfileRow | null> => {
+  const cleanEmail = normalizeEmail(email);
+  const cleanPassword = normalizePassword(password);
+  if (!cleanEmail) return null;
+
+  let profile = await lookupProfileForLogin(cleanEmail);
+  if (profile) return profile;
+
+  if (cleanPassword) {
+    profile = await lookupProfileViaAdminAuthRpc(cleanEmail, cleanPassword);
+    if (profile) return profile;
+
+    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+      email: cleanEmail,
+      password: cleanPassword,
+    });
+
+    if (!authError && authData.user) {
+      profile = await lookupProfileById(authData.user.id);
+      if (profile) return profile;
+
+      profile = await fetchProfileWhileAuthenticated(
+        authData.user.id,
+        authData.user.email ?? cleanEmail
+      );
+      if (profile) return profile;
+    }
+  }
+
+  return null;
 };
 
 export const lookupProfileById = async (userId: string): Promise<ProfileRow | null> => {

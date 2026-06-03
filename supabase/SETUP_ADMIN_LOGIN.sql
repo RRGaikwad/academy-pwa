@@ -1,5 +1,9 @@
--- Bypass RLS for pre-login profile lookup (admin, student, teacher routing).
--- Run in Supabase SQL Editor if migrations are not auto-applied.
+-- =============================================================================
+-- RUN THIS ENTIRE FILE IN SUPABASE → SQL Editor → Run
+-- Fixes "Account not found" for admin login
+-- =============================================================================
+
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS password text;
 
 CREATE OR REPLACE FUNCTION public.lookup_profile_for_login(p_email text)
 RETURNS jsonb
@@ -65,7 +69,6 @@ REVOKE ALL ON FUNCTION public.lookup_profile_by_id(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.lookup_profile_for_login(text) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.lookup_profile_by_id(uuid) TO anon, authenticated;
 
--- Allow admin login through the same RPC used for students/teachers
 CREATE OR REPLACE FUNCTION public.authenticate_academy_user(p_email text, p_password text)
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -158,3 +161,5 @@ BEGIN
   RETURN NULL;
 END;
 $$;
+
+GRANT EXECUTE ON FUNCTION public.authenticate_academy_user(text, text) TO anon, authenticated;

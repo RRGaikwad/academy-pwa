@@ -8,6 +8,7 @@ import {
   lookupProfileById,
   lookupProfileForLogin,
   normalizeEmail,
+  resolveProfileForLogin,
   performAcademyLogin,
   restoreAcademyUserById,
 } from '../lib/auth';
@@ -536,14 +537,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const cleanEmail = normalizeEmail(email);
       const cleanPassword = password.trim();
 
-      // 1. Fetch profile by email (RPC bypasses RLS on profiles)
-      const profile = await lookupProfileForLogin(cleanEmail);
+      // 1. Resolve profile (RPC, profiles.password RPC, or Supabase Auth + RLS)
+      const profile = await resolveProfileForLogin(cleanEmail, password);
 
       if (!profile) {
         return {
           ok: false,
           reason:
-            'Account not found. Ensure your admin row exists in Supabase profiles (role = admin) and run the latest SQL migration (lookup_profile_for_login).',
+            'No account found for this email. In Supabase: add a profiles row (role = admin, same email), set profiles.password, and run supabase/migrations/20250603000000_profile_lookup_login.sql in the SQL Editor.',
         };
       }
 
