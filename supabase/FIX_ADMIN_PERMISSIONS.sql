@@ -1,13 +1,12 @@
 -- =============================================================================
--- ULTIMATE ADMIN AUTH & PERMISSIONS FIX
+-- ULTIMATE ADMIN AUTH & PERMISSIONS FIX (v2 - PERSISTENCE & REALTIME)
 -- RUN THIS IN SUPABASE → SQL Editor → Run
--- This script fixes the "Account not found" and "Incorrect password" issues for admins.
 -- =============================================================================
 
 -- 1. Ensure password column exists in profiles
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS password text;
 
--- 2. Fix Profile Lookup RPC (Bypasses RLS for login)
+-- 2. Fix Profile Lookup RPC
 CREATE OR REPLACE FUNCTION public.lookup_profile_for_login(p_email text)
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -37,7 +36,7 @@ BEGIN
 END;
 $$;
 
--- 3. Fix Academy User Authentication RPC (Handles Admin/Student/Teacher)
+-- 3. Fix Academy User Authentication RPC
 CREATE OR REPLACE FUNCTION public.authenticate_academy_user(p_email text, p_password text)
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -54,7 +53,6 @@ BEGIN
     RETURN NULL;
   END IF;
 
-  -- Find the profile first
   SELECT * INTO v_profile
   FROM public.profiles
   WHERE lower(trim(email)) = lower(trim(p_email))
@@ -64,7 +62,7 @@ BEGIN
     RETURN NULL;
   END IF;
 
-  -- ADMIN CASE: Check profiles.password
+  -- ADMIN CASE
   IF lower(coalesce(v_profile.role::text, '')) = 'admin' THEN
     IF trim(coalesce(v_profile.password, '')) = v_input THEN
       RETURN jsonb_build_object(
@@ -110,18 +108,8 @@ BEGIN
 END;
 $$;
 
--- 4. Ensure is_admin() helper is correct
-CREATE OR REPLACE FUNCTION public.is_admin()
-RETURNS boolean AS $$
-BEGIN
-  RETURN EXISTS (
-    SELECT 1 FROM public.profiles
-    WHERE id = auth.uid() AND lower(role::text) = 'admin'
-  );
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-
--- 5. Grant absolute access to admins for all tables
+-- 4. Grant absolute access to admins for all tables
+-- We use a subquery in USING/WITH CHECK to ensure the role is checked directly against the profiles table
 DO $$
 DECLARE
     t text;
@@ -137,14 +125,17 @@ BEGIN
         EXECUTE format('
             CREATE POLICY "Admins have full access" ON public.%I
             FOR ALL TO authenticated
-            USING (public.is_admin())
-            WITH CHECK (public.is_admin())
+            USING (
+                COALESCE((SELECT lower(role::text) FROM public.profiles WHERE id = auth.uid()), '''') = ''admin''
+            )
+            WITH CHECK (
+                COALESCE((SELECT lower(role::text) FROM public.profiles WHERE id = auth.uid()), '''') = ''admin''
+            )
         ', t);
     END LOOP;
 END $$;
 
--- 6. Fix for existing admins: ensure they have a profile
--- We use COALESCE to provide a default name 'Admin' to satisfy NOT NULL constraints
+-- 5. Fix for existing admins: ensure they have a profile
 INSERT INTO public.profiles (id, email, role, name)
 SELECT 
     id, 
@@ -152,36 +143,40 @@ SELECT
     'admin',
     COALESCE(raw_user_meta_data->>'full_name', raw_user_meta_data->>'name', 'Admin')
 FROM auth.users
-ON CONFLICT (id) DO UPDATE SET 
-    role = 'admin',
-    name = COALESCE(public.profiles.name, EXCLUDED.name);
+ON CONFLICT (id) DO UPDATE SET role = 'admin';
 
--- 7. Fix trigger to satisfy NOT NULL name (if it exists)
-CREATE OR REPLACE FUNCTION public.handle_new_user()
-RETURNS trigger AS $$
-BEGIN
-  INSERT INTO public.profiles (id, email, role, name)
-  VALUES (
-    new.id, 
-    new.email, 
-    'student', 
-    COALESCE(new.raw_user_meta_data->>'full_name', new.raw_user_meta_data->>'name', 'User')
-  );
-  RETURN new;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-
--- 8. Optional: Make name nullable if you prefer it not to be mandatory
-ALTER TABLE public.profiles ALTER COLUMN name DROP NOT NULL;
-
--- 9. Grant execution permissions
+-- 6. Grant execution permissions
 GRANT EXECUTE ON FUNCTION public.lookup_profile_for_login(text) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.authenticate_academy_user(text, text) TO anon, authenticated;
 
--- =============================================================================
--- MANUAL STEP (Run if you still can't log in):
--- Replace 'your-email@example.com' and 'your-password' with your real info.
--- =============================================================================
--- UPDATE public.profiles 
--- SET role = 'admin', password = 'your-password' 
--- WHERE email = 'your-email@example.com';
+-- 7. Enable Realtime for all tables
+-- This ensures that changes made by one role are instantly seen by others
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime') THEN
+        CREATE PUBLICATION supabase_realtime;
+    END IF;
+END $$;
+
+ALTER PUBLICATION supabase_realtime ADD TABLE 
+    public.profiles, 
+    public.students, 
+    public.teachers, 
+    public.batches, 
+    public.announcements, 
+    public.exams, 
+    public.attendance, 
+    public.fee_payments, 
+    public.study_materials, 
+    public.exam_results;
+
+-- 8. Standard Read Access for Everyone (Announcements, Profiles, Batches)
+-- These are necessary for initial state load
+DROP POLICY IF EXISTS "Everyone can view announcements" ON public.announcements;
+CREATE POLICY "Everyone can view announcements" ON public.announcements FOR SELECT TO authenticated USING (true);
+
+DROP POLICY IF EXISTS "Everyone can view batches" ON public.batches;
+CREATE POLICY "Everyone can view batches" ON public.batches FOR SELECT TO authenticated USING (true);
+
+DROP POLICY IF EXISTS "Everyone can view profiles" ON public.profiles;
+CREATE POLICY "Everyone can view profiles" ON public.profiles FOR SELECT TO authenticated USING (true);
