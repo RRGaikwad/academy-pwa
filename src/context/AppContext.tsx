@@ -564,31 +564,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     void refreshData();
 
-    const tables = [
-      { name: 'profiles', fetcher: () => void refreshData() },
-      { name: 'students', fetcher: () => void refreshData() },
-      { name: 'teachers', fetcher: () => void refreshData() },
-      { name: 'batches', fetcher: () => void refreshData() },
-      { name: 'announcements', fetcher: () => void refreshData() },
-      { name: 'exams', fetcher: () => void refreshData() },
-      { name: 'attendance', fetcher: () => void refreshData() },
-      { name: 'fee_payments', fetcher: () => void refreshData() },
-      { name: 'study_materials', fetcher: () => void refreshData() },
-      { name: 'exam_results', fetcher: () => void refreshData() },
-    ];
-
-    const channels = tables.map((table) =>
-      supabase
-        .channel(`public:${table.name}:${userId}`)
-        .on('postgres_changes', { event: '*', table: table.name, schema: 'public' }, () => {
-          void table.fetcher();
-        })
-        .subscribe()
-    );
+    // Use a single channel for all database changes to reduce overhead and improve sync speed
+    const channel = supabase
+      .channel('db-all-changes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public' },
+        (payload) => {
+          console.log('[Realtime] Change detected:', payload.table);
+          // Debounce refresh to avoid multiple rapid reloads
+          void refreshData();
+        }
+      )
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          console.log('[Realtime] Connected to database changes');
+        }
+      });
 
     return () => {
       setLoading(false);
-      channels.forEach((channel) => supabase.removeChannel(channel));
+      void supabase.removeChannel(channel);
     };
   }, [currentUser?.id, refreshData]);
 

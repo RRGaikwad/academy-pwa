@@ -172,7 +172,8 @@ SELECT
 FROM auth.users
 ON CONFLICT (id) DO UPDATE SET role = 'admin';
 
--- 8. Enable Realtime with Conflict Handling
+-- 8. Enable Realtime with Bulletproof Configuration
+-- 1. Create publication if it doesn't exist
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime') THEN
@@ -180,6 +181,8 @@ BEGIN
     END IF;
 END $$;
 
+-- 2. Set Replica Identity to FULL for all tables and add them to the publication
+-- This ensures that Realtime can track changes even for tables with complex structures
 DO $$
 DECLARE
     t text;
@@ -190,6 +193,10 @@ DECLARE
     ];
 BEGIN
     FOREACH t IN ARRAY tables LOOP
+        -- Set replica identity to FULL so that all column changes are broadcasted
+        EXECUTE format('ALTER TABLE public.%I REPLICA IDENTITY FULL', t);
+        
+        -- Add to publication, ignoring errors if already present
         BEGIN
             EXECUTE format('ALTER PUBLICATION supabase_realtime ADD TABLE public.%I', t);
         EXCEPTION WHEN OTHERS THEN NULL; END;
