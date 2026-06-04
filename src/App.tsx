@@ -1,3 +1,4 @@
+import React, { useState, useEffect } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { Login } from './components/Login';
 import { Layout } from './components/Layout';
@@ -20,11 +21,36 @@ import { StudyMaterials } from './components/shared/StudyMaterials';
 const AppContent = () => {
   const { currentUser, activeTab, authLoading } = useApp();
 
+  const [showLoadingFallback, setShowLoadingFallback] = useState(false);
+
+  useEffect(() => {
+    if (authLoading && !currentUser) {
+      const timer = setTimeout(() => {
+        setShowLoadingFallback(true);
+      }, 8000); // After 8 seconds, show a fallback button
+      return () => clearTimeout(timer);
+    } else {
+      setShowLoadingFallback(false);
+    }
+  }, [authLoading, currentUser]);
+
   if (authLoading && !currentUser) {
     return (
-      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4">
+      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4 text-center">
         <div className="w-12 h-12 border-4 border-purple-600 border-t-transparent rounded-full animate-spin mb-4"></div>
         <p className="text-slate-600 font-medium animate-pulse">Checking your session...</p>
+        
+        {showLoadingFallback && (
+          <div className="mt-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <p className="text-sm text-slate-500 mb-4">Taking longer than usual?</p>
+            <button 
+              onClick={() => window.location.reload()}
+              className="px-6 py-2 bg-white border border-slate-200 text-slate-700 rounded-xl shadow-sm hover:bg-slate-50 transition-colors font-medium"
+            >
+              Reload Application
+            </button>
+          </div>
+        )}
       </div>
     );
   }

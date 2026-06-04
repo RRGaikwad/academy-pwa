@@ -103,6 +103,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [loading, setLoading] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
   const syncGenerationRef = useRef(0);
+  const isAuthenticatingRef = useRef(false);
   const [activeTab, setActiveTab] = useState(() => {
     return localStorage.getItem(STORAGE_KEYS.ACTIVE_TAB) || 'dashboard';
   });
@@ -420,6 +421,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const role = String(profile.role ?? '').toLowerCase();
         profile.role = role;
 
+        // Only update current user if we're not in the middle of a manual login
         if (isMounted && role) {
           const sessionUser =
             role === 'admin'
@@ -427,7 +429,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               : { ...profile, role };
           setCurrentUser(sessionUser);
           localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(sessionUser));
-        } else if (isMounted) {
+        } else if (isMounted && !isAuthenticatingRef.current) {
           const cached = parseCachedUser();
           const cachedRole = cached?.role?.toString().toLowerCase();
           if (cachedRole === 'admin' && cached?.id) {
@@ -472,6 +474,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         if (session?.user) {
           await syncProfile(session.user.id, session.user.email);
+          if (isMounted) setAuthLoading(false);
           return;
         }
 
@@ -488,6 +491,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               } else {
                 setCurrentUser(cachedUser);
               }
+              setAuthLoading(false);
             }
             return;
           }
@@ -499,6 +503,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               setCurrentUser(adminUser);
               localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(adminUser));
             }
+            setAuthLoading(false);
             return;
           }
         }
@@ -527,12 +532,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (event === 'SIGNED_IN' && session?.user) {
         await syncProfile(session.user.id, session.user.email);
       } else if (event === 'SIGNED_OUT') {
-        const cached = parseCachedUser();
-        const cachedRole = cached?.role?.toString().toLowerCase();
-        if (cachedRole === 'admin' || cachedRole === 'student' || cachedRole === 'teacher') {
-          if (isMounted) setAuthLoading(false);
-          return;
-        }
         if (isMounted) {
           setCurrentUser(null);
           localStorage.removeItem(STORAGE_KEYS.USER);
@@ -591,6 +590,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const login = useCallback(async (email: string, password: string): Promise<LoginResult> => {
     try {
+      isAuthenticatingRef.current = true;
       localStorage.removeItem(STORAGE_KEYS.USER);
       if (!isSupabaseConfigured()) {
         return { ok: false, reason: 'Supabase not configured.' };
@@ -638,6 +638,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (err) {
       console.error('Unified Login Error:', err);
       return { ok: false, reason: 'An unexpected error occurred. Please try again.' };
+    } finally {
+      isAuthenticatingRef.current = false;
+      setAuthLoading(false);
     }
   }, []);
 
