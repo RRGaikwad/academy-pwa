@@ -138,6 +138,9 @@ BEGIN
         EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
         EXECUTE format('DROP POLICY IF EXISTS "Admins have full access" ON public.%I', t);
         EXECUTE format('DROP POLICY IF EXISTS "Public read for authenticated" ON public.%I', t);
+        EXECUTE format('DROP POLICY IF EXISTS "Self read" ON public.%I', t);
+        EXECUTE format('DROP POLICY IF EXISTS "Self read student" ON public.%I', t);
+        EXECUTE format('DROP POLICY IF EXISTS "Self read teacher" ON public.%I', t);
         
         -- Admin Access Policy
         EXECUTE format('
@@ -159,7 +162,10 @@ BEGIN
 END $$;
 
 -- 6. Public Read for essential tables (to ensure app loads)
+DROP POLICY IF EXISTS "Public read announcements" ON public.announcements;
 CREATE POLICY "Public read announcements" ON public.announcements FOR SELECT TO authenticated USING (true);
+
+DROP POLICY IF EXISTS "Public read batches" ON public.batches;
 CREATE POLICY "Public read batches" ON public.batches FOR SELECT TO authenticated USING (true);
 
 -- 7. Fix for existing admins
