@@ -283,6 +283,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         try {
           const res = (await withSyncTimeout(query)) as { data: any; error: any };
           if (res.error) {
+            // Ignore "relation does not exist" errors (42P01) - means table isn't created yet
+            if (res.error.code === '42P01') {
+              return { data: [], error: null };
+            }
             console.warn(`Error fetching ${table}:`, res.error.message);
             return { data: null, error: res.error };
           }
