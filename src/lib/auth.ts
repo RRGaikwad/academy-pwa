@@ -68,7 +68,8 @@ const mapRpcProfileRow = (payload: Record<string, unknown>): ProfileRow | null =
 const isMissingRpcFunction = (message: string): boolean =>
   message.includes('Could not find the function') || message.includes('does not exist');
 
-const profileSelectFields = 'id, name, email, phone, role, password';
+// Replaced unused constant - all select queries inline their field lists to maintain RLS compatibility
+// const profileSelectFields = 'id, name, email, phone, role, password';
 
 async function lookupProfileViaAdminAuthRpc(
   cleanEmail: string,

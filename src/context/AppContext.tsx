@@ -615,11 +615,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       // 3. Success Path A: Supabase Auth Succeeded
       if (!authError && authData.user) {
+        // Force an immediate state update to stop the "Signing In" button state
+        // even if the profile resolution takes a moment.
+        setAuthLoading(false);
+        isAuthenticatingRef.current = false;
+
         // We have a valid session! Try to get the profile from the promise we already started
         // or fall back to a quick lookup by ID.
         let resolvedProfile = await Promise.race([
           profilePromise,
-          new Promise<null>((resolve) => setTimeout(() => resolve(null), 2000)) // Don't wait more than 2s for email-based lookup
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 1000)) // Reduced to 1s for ultra-fast transition
         ]);
 
         if (!resolvedProfile) {
