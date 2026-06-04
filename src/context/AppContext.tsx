@@ -595,47 +595,70 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const login = useCallback(async (email: string, password: string): Promise<LoginResult> => {
     try {
       isAuthenticatingRef.current = true;
-      localStorage.removeItem(STORAGE_KEYS.USER);
+      const cleanEmail = normalizeEmail(email);
+      const cleanPassword = password.trim();
+
       if (!isSupabaseConfigured()) {
         return { ok: false, reason: 'Supabase not configured.' };
       }
 
-      const cleanEmail = normalizeEmail(email);
-      const cleanPassword = password.trim();
+      // 1. Parallel Execution: Start Supabase Auth and Profile resolution at the same time
+      // This is the single biggest speed improvement - we don't wait for one to finish before starting the other.
+      const [authResponse, profile] = await Promise.all([
+        supabase.auth.signInWithPassword({ email: cleanEmail, password: cleanPassword })
+          .catch(err => ({ data: { user: null, session: null }, error: err })),
+        resolveProfileForLogin(cleanEmail).catch(() => null)
+      ]);
 
-      // 1. Resolve profile (RPC is fast)
-      const profile = await resolveProfileForLogin(cleanEmail, cleanPassword);
+      const { data: authData, error: authError } = authResponse;
 
-      if (!profile) {
-        return {
-          ok: false,
-          reason: 'Account not found. Please check your email or contact support.',
-        };
+      // 2. Success Path A: Supabase Auth Succeeded
+      if (!authError && authData.user) {
+        const resolvedProfile = profile || await lookupProfileById(authData.user.id);
+        if (resolvedProfile) {
+          const role = resolvedProfile.role?.toLowerCase() || 'student';
+          const sessionUser = role === 'admin' 
+            ? toAdminSession(resolvedProfile) 
+            : { ...resolvedProfile, role } as any;
+
+          setCurrentUser(sessionUser);
+          localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(sessionUser));
+          setActiveTab('dashboard');
+          return { ok: true, user: sessionUser };
+        }
       }
 
-      const role = profile.role?.toLowerCase();
-
-      // 2. Optimized Flow: Handle ADMIN / AUTH-ENABLED users immediately
-      // If we have a profile and it's an admin, we MUST use Supabase Auth.
-      if (role === 'admin') {
-        const adminResult = await authenticateAdminUser(profile, cleanEmail, cleanPassword);
-        if (adminResult.ok) {
-          setCurrentUser(adminResult.user);
-          localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(adminResult.user));
-          setActiveTab('dashboard');
+      // 3. Success Path B: Profile found but Auth failed (Fallback to Academy RPC login)
+      // This handles cases where user is in profiles table but not yet in auth.users
+      if (profile) {
+        const role = profile.role?.toLowerCase();
+        
+        if (role === 'admin') {
+          // If admin auth failed but we have a profile, check local password as last resort
+          const adminResult = await authenticateAdminUser(profile, cleanEmail, cleanPassword);
+          if (adminResult.ok) {
+            setCurrentUser(adminResult.user);
+            localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(adminResult.user));
+            setActiveTab('dashboard');
+            return adminResult;
+          }
           return adminResult;
         }
-        return adminResult;
+
+        // Student/Teacher academy login
+        const academyResult = await performAcademyLogin(cleanEmail, cleanPassword);
+        if (academyResult.ok) {
+          setCurrentUser(academyResult.user);
+          localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(academyResult.user));
+          setActiveTab('dashboard');
+        }
+        return academyResult;
       }
 
-      // 3. Fallback for Student/Teacher (might use RPC-based password verification)
-      const academyResult = await performAcademyLogin(cleanEmail, cleanPassword);
-      if (academyResult.ok) {
-        setCurrentUser(academyResult.user);
-        localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(academyResult.user));
-        setActiveTab('dashboard');
-      }
-      return academyResult;
+      return {
+        ok: false,
+        reason: authError?.message || 'Invalid email or password. Please try again.',
+      };
     } catch (err) {
       console.error('Unified Login Error:', err);
       return { ok: false, reason: 'An unexpected error occurred. Please try again.' };
