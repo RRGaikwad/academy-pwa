@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 import { User, Student, Teacher, Batch, AttendanceRecord, Exam, ExamResult, FeePayment, Announcement, StudyMaterial } from '../types';
 import { supabase } from '../lib/supabase';
 import {
@@ -59,6 +59,24 @@ interface AppContextType {
 
 const AppContext = createContext<AppContextType | null>(null);
 
+const SYNC_TIMEOUT_MS = 12_000;
+
+const toAdminSession = (user: AcademySessionUser | Record<string, unknown>): AcademySessionUser => ({
+  id: String(user.id),
+  name: String(user.name || 'Admin'),
+  email: String(user.email || ''),
+  phone: String(user.phone ?? ''),
+  role: 'admin',
+});
+
+const withSyncTimeout = <T,>(promise: Promise<T>): Promise<T> =>
+  Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      setTimeout(() => reject(new Error('Data sync timed out')), SYNC_TIMEOUT_MS);
+    }),
+  ]);
+
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { isInstallable, installApp } = usePWA();
   const [currentUser, setCurrentUser] = useState<(User & any) | null>(() => {
@@ -80,6 +98,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [studyMaterials, setStudyMaterials] = useState<StudyMaterial[]>([]);
   const [loading, setLoading] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
+  const syncGenerationRef = useRef(0);
   const [activeTab, setActiveTab] = useState(() => {
     return localStorage.getItem(STORAGE_KEYS.ACTIVE_TAB) || 'dashboard';
   });
@@ -136,20 +155,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (isMounted && role) {
           const sessionUser =
             role === 'admin'
-              ? {
-                  id: String(profile.id),
-                  name: String(profile.name || 'Admin'),
-                  email: String(profile.email || ''),
-                  phone: String(profile.phone || ''),
-                  role: 'admin' as const,
-                }
+              ? toAdminSession(profile)
               : { ...profile, role };
           setCurrentUser(sessionUser);
           localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(sessionUser));
         } else if (isMounted) {
-          console.warn('User authenticated but no role found in profiles, students, or teachers');
-          setCurrentUser(null);
-          localStorage.removeItem(STORAGE_KEYS.USER);
+          const cached = parseCachedUser();
+          const cachedRole = cached?.role?.toString().toLowerCase();
+          if (cachedRole === 'admin' && cached?.id) {
+            const adminUser = toAdminSession(cached);
+            setCurrentUser(adminUser);
+            localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(adminUser));
+          } else {
+            console.warn('User authenticated but no role found in profiles, students, or teachers');
+            setCurrentUser(null);
+            localStorage.removeItem(STORAGE_KEYS.USER);
+          }
         }
       } catch (err) {
         console.error('Profile sync error:', err);
@@ -170,17 +191,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const initAuth = async () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
         const cachedUser = parseCachedUser();
         const cachedRole = cachedUser?.role?.toString().toLowerCase();
 
-        // Priority 1: Supabase Session (The most secure/standard way)
+        // Fast path: restore admin from cache so refresh never stalls on auth
+        if (cachedRole === 'admin' && cachedUser?.id && isMounted) {
+          const adminUser = toAdminSession(cachedUser);
+          setCurrentUser(adminUser);
+        }
+
+        const { data: { session } } = await supabase.auth.getSession();
+
         if (session?.user) {
           await syncProfile(session.user.id, session.user.email);
           return;
         }
 
-        // Priority 2: Manual Session Recovery (For Students, Teachers, and Fallback Admins)
         if (cachedUser?.id) {
           if (cachedRole === 'student' || cachedRole === 'teacher') {
             const restored = await restoreAcademyUserById(
@@ -198,28 +224,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             return;
           }
 
-          if (cachedRole === 'admin') {
+          if (cachedRole === 'admin' && isMounted) {
             const verifyAdmin = await lookupProfileById(cachedUser.id);
-            if (verifyAdmin?.role?.toLowerCase() === 'admin' && isMounted) {
-              setCurrentUser({
-                id: verifyAdmin.id,
-                name: verifyAdmin.name || 'Admin',
-                email: verifyAdmin.email || '',
-                phone: verifyAdmin.phone ?? '',
-                role: 'admin',
-              });
-              return;
+            if (verifyAdmin?.role?.toLowerCase() === 'admin') {
+              const adminUser = toAdminSession(verifyAdmin);
+              setCurrentUser(adminUser);
+              localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(adminUser));
             }
+            return;
           }
         }
 
-        if (isMounted) {
+        if (isMounted && cachedRole !== 'admin') {
           setCurrentUser(null);
           localStorage.removeItem(STORAGE_KEYS.USER);
         }
       } catch (err) {
         console.error('Auth init error:', err);
-        if (isMounted) {
+        const cached = parseCachedUser();
+        if (isMounted && cached?.role?.toString().toLowerCase() !== 'admin') {
           setCurrentUser(null);
           localStorage.removeItem(STORAGE_KEYS.USER);
         }
@@ -238,7 +261,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } else if (event === 'SIGNED_OUT') {
         const cached = parseCachedUser();
         const cachedRole = cached?.role?.toString().toLowerCase();
-        if (cachedRole === 'student' || cachedRole === 'teacher') {
+        if (cachedRole === 'admin' || cachedRole === 'student' || cachedRole === 'teacher') {
           if (isMounted) setAuthLoading(false);
           return;
         }
@@ -260,18 +283,143 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     localStorage.setItem(STORAGE_KEYS.ACTIVE_TAB, activeTab);
   }, [activeTab]);
 
-  // Supabase Data Fetching & Real-time Subscriptions
+  // Supabase Data Fetching & Real-time Subscriptions (background — never blocks the UI)
   useEffect(() => {
-    let isMounted = true;
+    const userId = currentUser?.id;
+    if (!userId) {
+      setLoading(false);
+      return;
+    }
 
-    const fetchData = async () => {
-      if (!currentUser) {
+    let cancelled = false;
+    const syncGeneration = ++syncGenerationRef.current;
+
+    const applyFetchedData = (
+      profiles: Record<string, unknown>[],
+      studentsRes: { data: Record<string, unknown>[] | null },
+      teachersRes: { data: Record<string, unknown>[] | null },
+      batchesRes: { data: Record<string, unknown>[] | null },
+      announcementsRes: { data: Record<string, unknown>[] | null },
+      examsRes: { data: Record<string, unknown>[] | null },
+      attendanceRes: { data: Record<string, unknown>[] | null },
+      feePaymentsRes: { data: Record<string, unknown>[] | null }
+    ) => {
+      if (cancelled) return;
+
+      if (studentsRes.data) {
+        const formatted: Student[] = studentsRes.data.map((s) => {
+          const p = profiles.find((prof) => prof.id === s.id) || {};
+          return {
+            ...s,
+            name: (p.name as string) || 'Unknown',
+            email: (p.email as string) || '',
+            phone: (p.phone as string) || '',
+            role: 'student' as const,
+            studentId: s.student_id,
+            batchId: s.batch_id,
+            parentName: s.parent_name,
+            parentPhone: s.parent_phone,
+            attendancePercent: Number(s.attendance_percent) || 0,
+            performanceScore: Number(s.performance_score) || 0,
+            subjects: (s.subjects as string[]) || [],
+            admissionDate: (s.admission_date as string) || '',
+            totalFees: Number(s.total_fees) || 0,
+            paidFees: Number(s.paid_fees) || 0,
+            notes: (s.notes as string) || '',
+            password: (s.password as string) || '',
+          };
+        });
+        setStudents(formatted);
+      }
+
+      if (teachersRes.data) {
+        const formatted: Teacher[] = teachersRes.data.map((t) => {
+          const p = profiles.find((prof) => prof.id === t.id) || {};
+          return {
+            ...t,
+            name: (p.name as string) || 'Unknown',
+            email: (p.email as string) || '',
+            phone: (p.phone as string) || '',
+            role: 'teacher' as const,
+            teacherId: t.teacher_id,
+            assignedCategories: (t.assigned_categories as string[]) || [],
+            permissions: (t.permissions as string[]) || [],
+            password: (t.password as string) || '',
+          };
+        });
+        setTeachers(formatted);
+      }
+
+      if (batchesRes.data) {
+        setBatches(
+          batchesRes.data.map((b) => ({
+            ...b,
+            studentIds: (b.student_ids as string[]) || [],
+            teacherIds: (b.teacher_ids as string[]) || [],
+          })) as Batch[]
+        );
+      }
+
+      if (announcementsRes.data) {
+        setAnnouncements(
+          announcementsRes.data.map((a) => ({
+            ...a,
+            authorId: a.author_id,
+            authorName: a.author_name,
+            targetRole: a.target_role,
+            targetBatch: a.target_batch,
+            createdAt: a.created_at,
+            referenceId: a.reference_id,
+          })) as Announcement[]
+        );
+      }
+
+      if (examsRes.data) {
+        setExams(
+          examsRes.data.map((e) => ({
+            ...e,
+            teacherId: e.teacher_id,
+            batchId: e.batch_id,
+            scheduledAt: e.scheduled_at,
+            chapterTags: (e.chapter_tags as string[]) || [],
+            hasNegativeMarking: e.has_negative_marking,
+          })) as Exam[]
+        );
+      }
+
+      if (attendanceRes.data) {
+        setAttendance(
+          attendanceRes.data.map((at) => ({
+            ...at,
+            batchId: at.batch_id,
+            teacherId: at.teacher_id,
+          })) as AttendanceRecord[]
+        );
+      }
+
+      if (feePaymentsRes.data) {
+        setFeePayments(
+          feePaymentsRes.data.map((p) => ({
+            ...p,
+            studentId: p.student_id,
+            receiptNo: p.receipt_no,
+          })) as FeePayment[]
+        );
+      }
+    };
+
+    const refreshData = async (options?: { showIndicator?: boolean }) => {
+      if (!currentUser?.id) {
+        setLoading(false);
         return;
       }
 
-      setLoading(true);
+      const generation = syncGeneration;
+      if (options?.showIndicator) {
+        setLoading(true);
+      }
+
       try {
-        // Parallel fetch for speed with error tolerance
         const [
           profilesRes,
           studentsRes,
@@ -280,252 +428,183 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           announcementsRes,
           examsRes,
           attendanceRes,
+          feePaymentsRes,
+        ] = await withSyncTimeout(
+          Promise.all([
+            supabase.from('profiles').select('*'),
+            supabase.from('students').select('*'),
+            supabase.from('teachers').select('*'),
+            supabase.from('batches').select('*'),
+            supabase.from('announcements').select('*').order('created_at', { ascending: false }),
+            supabase.from('exams').select('*').order('scheduled_at', { ascending: false }),
+            supabase.from('attendance').select('*'),
+            supabase.from('fee_payments').select('*').order('date', { ascending: false }),
+          ])
+        );
+
+        if (cancelled || generation !== syncGenerationRef.current) return;
+
+        applyFetchedData(
+          profilesRes.data || [],
+          studentsRes,
+          teachersRes,
+          batchesRes,
+          announcementsRes,
+          examsRes,
+          attendanceRes,
           feePaymentsRes
-        ] = await Promise.all([
-          supabase.from('profiles').select('*'),
-          supabase.from('students').select('*'),
-          supabase.from('teachers').select('*'),
-          supabase.from('batches').select('*'),
-          supabase.from('announcements').select('*').order('created_at', { ascending: false }),
-          supabase.from('exams').select('*').order('scheduled_at', { ascending: false }),
-          supabase.from('attendance').select('*'),
-          supabase.from('fee_payments').select('*').order('date', { ascending: false })
-        ]);
-
-        if (!isMounted) return;
-
-        const profiles = profilesRes.data || [];
-        
-        // 1. Format Students (Only if data available)
-        if (studentsRes.data) {
-          const formatted: Student[] = studentsRes.data.map(s => {
-            const p = profiles.find(prof => prof.id === s.id) || {};
-            return {
-              ...s,
-              name: p.name || 'Unknown',
-              email: p.email || '',
-              phone: p.phone || '',
-              role: 'student',
-              studentId: s.student_id,
-              batchId: s.batch_id,
-              parentName: s.parent_name,
-              parentPhone: s.parent_phone,
-              attendancePercent: Number(s.attendance_percent) || 0,
-              performanceScore: Number(s.performance_score) || 0,
-              subjects: s.subjects || [],
-              admissionDate: s.admission_date || '',
-              totalFees: Number(s.total_fees) || 0,
-              paidFees: Number(s.paid_fees) || 0,
-              notes: s.notes || '',
-              password: s.password || ''
-            };
-          });
-          setStudents(formatted);
-        }
-
-        // 2. Format Teachers (Only if data available)
-        if (teachersRes.data) {
-          const formatted: Teacher[] = teachersRes.data.map(t => {
-            const p = profiles.find(prof => prof.id === t.id) || {};
-            return {
-              ...t,
-              name: p.name || 'Unknown',
-              email: p.email || '',
-              phone: p.phone || '',
-              role: 'teacher',
-              teacherId: t.teacher_id,
-              assignedCategories: t.assigned_categories || [],
-              permissions: t.permissions || [],
-              password: t.password || ''
-            };
-          });
-          setTeachers(formatted);
-        }
-
-        // 3. Format Batches (Only if data available)
-        if (batchesRes.data) {
-          setBatches(batchesRes.data.map(b => ({
-            ...b,
-            studentIds: b.student_ids || [],
-            teacherIds: b.teacher_ids || []
-          })));
-        }
-
-        // 4. Format Announcements (Available to all roles)
-        if (announcementsRes.data) {
-          setAnnouncements(announcementsRes.data.map(a => ({
-            ...a,
-            authorId: a.author_id,
-            authorName: a.author_name,
-            targetRole: a.target_role,
-            targetBatch: a.target_batch,
-            createdAt: a.created_at,
-            referenceId: a.reference_id
-          })));
-        }
-
-        // 5. Format Exams (Available to all roles, but RLS will filter rows)
-        if (examsRes.data) {
-          setExams(examsRes.data.map(e => ({
-            ...e,
-            teacherId: e.teacher_id,
-            batchId: e.batch_id,
-            scheduledAt: e.scheduled_at,
-            chapterTags: e.chapter_tags || [],
-            hasNegativeMarking: e.has_negative_marking
-          })));
-        }
-
-        // 6. Format Attendance (RLS will filter)
-        if (attendanceRes.data) {
-          setAttendance(attendanceRes.data.map(at => ({
-            ...at,
-            batchId: at.batch_id,
-            teacherId: at.teacher_id
-          })));
-        }
-
-        // 7. Format Fee Payments (RLS will filter)
-        if (feePaymentsRes.data) {
-          setFeePayments(feePaymentsRes.data.map(p => ({
-            ...p,
-            studentId: p.student_id,
-            receiptNo: p.receipt_no
-          })));
-        }
-
+        );
       } catch (err) {
-        console.error('Critical data fetch error:', err);
+        console.error('Data sync error:', err);
       } finally {
-        if (isMounted) setLoading(false);
+        if (generation === syncGenerationRef.current) {
+          setLoading(false);
+        }
       }
     };
 
-    fetchData();
+    void refreshData();
 
-    // Subscribe to tables for targeted sync
+    const refreshStudents = async () => {
+      const { data } = await supabase.from('students').select('*');
+      if (!data || cancelled) return;
+      const { data: profiles } = await supabase.from('profiles').select('*');
+      const profileList = profiles || [];
+      const formatted: Student[] = data.map((s) => {
+        const p = profileList.find((prof) => prof.id === s.id) || {};
+        return {
+          ...s,
+          name: p.name || 'Unknown',
+          email: p.email || '',
+          phone: p.phone || '',
+          role: 'student' as const,
+          studentId: s.student_id,
+          batchId: s.batch_id,
+          parentName: s.parent_name,
+          parentPhone: s.parent_phone,
+          attendancePercent: Number(s.attendance_percent) || 0,
+          performanceScore: Number(s.performance_score) || 0,
+          subjects: s.subjects || [],
+          admissionDate: s.admission_date || '',
+          totalFees: Number(s.total_fees) || 0,
+          paidFees: Number(s.paid_fees) || 0,
+          notes: s.notes || '',
+          password: s.password || '',
+        };
+      });
+      setStudents(formatted);
+    };
+
+    const refreshTeachers = async () => {
+      const { data } = await supabase.from('teachers').select('*');
+      if (!data || cancelled) return;
+      const { data: profiles } = await supabase.from('profiles').select('*');
+      const profileList = profiles || [];
+      const formatted: Teacher[] = data.map((t) => {
+        const p = profileList.find((prof) => prof.id === t.id) || {};
+        return {
+          ...t,
+          name: p.name || 'Unknown',
+          email: p.email || '',
+          phone: p.phone || '',
+          role: 'teacher' as const,
+          teacherId: t.teacher_id,
+          assignedCategories: t.assigned_categories || [],
+          permissions: t.permissions || [],
+          password: t.password || '',
+        };
+      });
+      setTeachers(formatted);
+    };
+
     const tables = [
-      { name: 'profiles', fetcher: fetchData },
-      { name: 'students', fetcher: async () => {
-        const { data } = await supabase.from('students').select('*');
-        if (data) {
-          const { data: profiles } = await supabase.from('profiles').select('*');
-          const formatted: Student[] = data.map(s => {
-            const p = profiles?.find(prof => prof.id === s.id) || {};
-            return {
-              ...s,
-              name: p.name || 'Unknown',
-              email: p.email || '',
-              phone: p.phone || '',
-              role: 'student',
-              studentId: s.student_id,
-              batchId: s.batch_id,
-              parentName: s.parent_name,
-              parentPhone: s.parent_phone,
-              attendancePercent: Number(s.attendance_percent) || 0,
-              performanceScore: Number(s.performance_score) || 0,
-              subjects: s.subjects || [],
-              admissionDate: s.admission_date || '',
-              totalFees: Number(s.total_fees) || 0,
-              paidFees: Number(s.paid_fees) || 0,
-              notes: s.notes || '',
-              password: s.password || ''
-            };
-          });
-          if (isMounted) setStudents(formatted);
-        }
-      }},
-      { name: 'teachers', fetcher: async () => {
-        const { data } = await supabase.from('teachers').select('*');
-        if (data) {
-          const { data: profiles } = await supabase.from('profiles').select('*');
-          const formatted: Teacher[] = data.map(t => {
-            const p = profiles?.find(prof => prof.id === t.id) || {};
-            return {
-              ...t,
-              name: p.name || 'Unknown',
-              email: p.email || '',
-              phone: p.phone || '',
-              role: 'teacher',
-              teacherId: t.teacher_id,
-              assignedCategories: t.assigned_categories || [],
-              permissions: t.permissions || [],
-              password: t.password || ''
-            };
-          });
-          if (isMounted) setTeachers(formatted);
-        }
-      }},
+      { name: 'profiles', fetcher: () => void refreshData() },
+      { name: 'students', fetcher: refreshStudents },
+      { name: 'teachers', fetcher: refreshTeachers },
       { name: 'batches', fetcher: async () => {
         const { data } = await supabase.from('batches').select('*');
-        if (data) {
-          if (isMounted) setBatches(data.map(b => ({
-            ...b,
-            studentIds: b.student_ids || [],
-            teacherIds: b.teacher_ids || []
-          })));
+        if (data && !cancelled) {
+          setBatches(
+            data.map((b) => ({
+              ...b,
+              studentIds: b.student_ids || [],
+              teacherIds: b.teacher_ids || [],
+            })) as Batch[]
+          );
         }
       }},
       { name: 'announcements', fetcher: async () => {
         const { data } = await supabase.from('announcements').select('*').order('created_at', { ascending: false });
-        if (data) {
-          if (isMounted) setAnnouncements(data.map(a => ({
-            ...a,
-            authorId: a.author_id,
-            authorName: a.author_name,
-            targetRole: a.target_role,
-            targetBatch: a.target_batch,
-            createdAt: a.created_at,
-            referenceId: a.reference_id
-          })));
+        if (data && !cancelled) {
+          setAnnouncements(
+            data.map((a) => ({
+              ...a,
+              authorId: a.author_id,
+              authorName: a.author_name,
+              targetRole: a.target_role,
+              targetBatch: a.target_batch,
+              createdAt: a.created_at,
+              referenceId: a.reference_id,
+            })) as Announcement[]
+          );
         }
       }},
       { name: 'exams', fetcher: async () => {
         const { data } = await supabase.from('exams').select('*').order('scheduled_at', { ascending: false });
-        if (data) {
-          if (isMounted) setExams(data.map(e => ({
-            ...e,
-            teacherId: e.teacher_id,
-            batchId: e.batch_id,
-            scheduledAt: e.scheduled_at,
-            chapterTags: e.chapter_tags || [],
-            hasNegativeMarking: e.has_negative_marking
-          })));
+        if (data && !cancelled) {
+          setExams(
+            data.map((e) => ({
+              ...e,
+              teacherId: e.teacher_id,
+              batchId: e.batch_id,
+              scheduledAt: e.scheduled_at,
+              chapterTags: e.chapter_tags || [],
+              hasNegativeMarking: e.has_negative_marking,
+            })) as Exam[]
+          );
         }
       }},
       { name: 'attendance', fetcher: async () => {
         const { data } = await supabase.from('attendance').select('*');
-        if (data) {
-          if (isMounted) setAttendance(data.map(at => ({
-            ...at,
-            batchId: at.batch_id,
-            teacherId: at.teacher_id
-          })));
+        if (data && !cancelled) {
+          setAttendance(
+            data.map((at) => ({
+              ...at,
+              batchId: at.batch_id,
+              teacherId: at.teacher_id,
+            })) as AttendanceRecord[]
+          );
         }
       }},
       { name: 'fee_payments', fetcher: async () => {
         const { data } = await supabase.from('fee_payments').select('*').order('date', { ascending: false });
-        if (data) {
-          if (isMounted) setFeePayments(data.map(p => ({
-            ...p,
-            studentId: p.student_id,
-            receiptNo: p.receipt_no
-          })));
+        if (data && !cancelled) {
+          setFeePayments(
+            data.map((p) => ({
+              ...p,
+              studentId: p.student_id,
+              receiptNo: p.receipt_no,
+            })) as FeePayment[]
+          );
         }
-      }}
+      }},
     ];
 
-    const channels = tables.map(table => 
-      supabase.channel(`public:${table.name}`)
-        .on('postgres_changes', { event: '*', table: table.name, schema: 'public' }, () => table.fetcher())
+    const channels = tables.map((table) =>
+      supabase
+        .channel(`public:${table.name}:${userId}`)
+        .on('postgres_changes', { event: '*', table: table.name, schema: 'public' }, () => {
+          void table.fetcher();
+        })
         .subscribe()
     );
 
     return () => {
-      isMounted = false;
-      channels.forEach(channel => supabase.removeChannel(channel));
+      cancelled = true;
+      setLoading(false);
+      channels.forEach((channel) => supabase.removeChannel(channel));
     };
-  }, [currentUser]);
+  }, [currentUser?.id]);
 
   const login = useCallback(async (email: string, password: string): Promise<LoginResult> => {
     try {
