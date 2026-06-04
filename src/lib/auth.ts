@@ -458,19 +458,30 @@ export async function authenticateAdminUser(
   const cleanEmail = normalizeEmail(email);
   const cleanPassword = normalizePassword(password);
 
-  const { error: authError } = await supabase.auth.signInWithPassword({
+  // 1. Attempt Supabase Auth login (Required for RLS to work properly)
+  const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
     email: cleanEmail,
     password: cleanPassword,
   });
 
-  if (authError && !passwordsMatch(profile.password, password)) {
-    return { ok: false, reason: 'Incorrect admin password. Please check your credentials.' };
+  // 2. Check if password matches profiles table (fallback/verification)
+  const isPasswordCorrect = passwordsMatch(profile.password, password);
+
+  if (authError) {
+    // If Supabase Auth fails AND profiles password doesn't match, it's a wrong password
+    if (!isPasswordCorrect) {
+      return { ok: false, reason: 'Incorrect admin password. Please check your credentials.' };
+    }
+    
+    // If Auth fails but profiles password matches, the user exists in profiles but 
+    // maybe not in auth.users or has a different password there.
+    console.warn('Admin Supabase Auth failed, but profiles password matches:', authError.message);
   }
 
   return {
     ok: true,
     user: {
-      id: profile.id,
+      id: authData.user?.id || profile.id,
       name: profile.name || 'Admin',
       email: profile.email || cleanEmail,
       phone: profile.phone ?? '',

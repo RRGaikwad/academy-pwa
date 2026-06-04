@@ -606,7 +606,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return {
           ok: false,
           reason:
-            'No account found for this email. In Supabase: add a profiles row (role = admin, same email), set profiles.password, and run supabase/migrations/20250603000000_profile_lookup_login.sql in the SQL Editor.',
+            'Admin account not found. To fix this: 1. Go to Supabase SQL Editor. 2. Run the "FIX_ADMIN_PERMISSIONS.sql" script. 3. Ensure your email is in the "profiles" table with role="admin".',
         };
       }
 
