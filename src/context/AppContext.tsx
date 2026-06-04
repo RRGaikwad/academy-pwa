@@ -602,19 +602,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return { ok: false, reason: 'Supabase not configured.' };
       }
 
-      // 1. Parallel Execution: Start Supabase Auth and Profile resolution at the same time
-      // This is the single biggest speed improvement - we don't wait for one to finish before starting the other.
-      const [authResponse, profile] = await Promise.all([
-        supabase.auth.signInWithPassword({ email: cleanEmail, password: cleanPassword })
-          .catch(err => ({ data: { user: null, session: null }, error: err })),
-        resolveProfileForLogin(cleanEmail).catch(() => null)
-      ]);
+      // 1. Start Auth and Profile resolution in parallel
+      const authPromise = supabase.auth.signInWithPassword({ email: cleanEmail, password: cleanPassword })
+        .catch(err => ({ data: { user: null, session: null }, error: err }));
+      
+      // Profile resolution can be slower, so we'll wrap it in a small timeout for the "instant" path
+      const profilePromise = resolveProfileForLogin(cleanEmail).catch(() => null);
 
+      // 2. Wait for Supabase Auth response (usually the most definitive and fastest)
+      const authResponse = await authPromise;
       const { data: authData, error: authError } = authResponse;
 
-      // 2. Success Path A: Supabase Auth Succeeded
+      // 3. Success Path A: Supabase Auth Succeeded
       if (!authError && authData.user) {
-        const resolvedProfile = profile || await lookupProfileById(authData.user.id);
+        // We have a valid session! Try to get the profile from the promise we already started
+        // or fall back to a quick lookup by ID.
+        let resolvedProfile = await Promise.race([
+          profilePromise,
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 2000)) // Don't wait more than 2s for email-based lookup
+        ]);
+
+        if (!resolvedProfile) {
+          resolvedProfile = await lookupProfileById(authData.user.id);
+        }
+
         if (resolvedProfile) {
           const role = resolvedProfile.role?.toLowerCase() || 'student';
           const sessionUser = role === 'admin' 
@@ -628,8 +639,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       }
 
-      // 3. Success Path B: Profile found but Auth failed (Fallback to Academy RPC login)
+      // 4. Success Path B: Profile found but Auth failed (Fallback to Academy RPC login)
       // This handles cases where user is in profiles table but not yet in auth.users
+      const profile = await profilePromise;
       if (profile) {
         const role = profile.role?.toLowerCase();
         
