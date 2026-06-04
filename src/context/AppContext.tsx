@@ -101,7 +101,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [studyMaterials, setStudyMaterials] = useState<StudyMaterial[]>([]);
   const [loading, setLoading] = useState(false);
-  const [authLoading, setAuthLoading] = useState(true);
+  const [authLoading, setAuthLoading] = useState(() => {
+    // If no user in storage, don't show loading screen, go straight to login
+    return !!localStorage.getItem(STORAGE_KEYS.USER);
+  });
   const syncGenerationRef = useRef(0);
   const isAuthenticatingRef = useRef(false);
   const [activeTab, setActiveTab] = useState(() => {
@@ -379,7 +382,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const syncProfile = async (userId: string, sessionEmail?: string) => {
       try {
         // 1. Try to get profile (RPC bypasses RLS)
-        const profileById = await lookupProfileById(userId);
+        // Run lookups in parallel to speed up role resolution
+        const [profileById, studentRes, teacherRes] = await Promise.all([
+          lookupProfileById(userId),
+          supabase.from('students').select('*').eq('id', userId).maybeSingle(),
+          supabase.from('teachers').select('*').eq('id', userId).maybeSingle()
+        ]);
+
         let profile: Record<string, unknown> = profileById
           ? { ...profileById }
           : { id: userId };
@@ -392,30 +401,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
         }
 
-        // 2. If no role in profile, check students table
-        if (!profile.role) {
-          const { data: student } = await supabase
-            .from('students')
-            .select('*')
-            .eq('id', userId)
-            .maybeSingle();
-          
-          if (student) {
-            profile = { ...profile, ...student, role: 'student' };
-          }
+        // 2. If no role in profile, check results from parallel queries
+        if (!profile.role && studentRes.data) {
+          profile = { ...profile, ...studentRes.data, role: 'student' };
         }
 
         // 3. Still no role? check teachers table
-        if (!profile.role) {
-          const { data: teacher } = await supabase
-            .from('teachers')
-            .select('*')
-            .eq('id', userId)
-            .maybeSingle();
-          
-          if (teacher) {
-            profile = { ...profile, ...teacher, role: 'teacher' };
-          }
+        if (!profile.role && teacherRes.data) {
+          profile = { ...profile, ...teacherRes.data, role: 'teacher' };
         }
         
         const role = String(profile.role ?? '').toLowerCase();
@@ -468,9 +461,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (cachedRole === 'admin' && cachedUser?.id && isMounted) {
           const adminUser = toAdminSession(cachedUser);
           setCurrentUser(adminUser);
+          setAuthLoading(false); // Immediate unlock for cached admins
         }
 
-        const { data: { session } } = await supabase.auth.getSession();
+        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+
+        if (sessionError) {
+          console.warn('Session check error:', sessionError.message);
+        }
 
         if (session?.user) {
           await syncProfile(session.user.id, session.user.email);
@@ -478,39 +476,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return;
         }
 
-        if (cachedUser?.id) {
-          if (cachedRole === 'student' || cachedRole === 'teacher') {
-            const restored = await restoreAcademyUserById(
-              cachedUser.id,
-              cachedRole as 'student' | 'teacher'
-            );
-            if (isMounted) {
-              if (restored) {
-                setCurrentUser(restored);
-                localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(restored));
-              } else {
-                setCurrentUser(cachedUser);
+        // If we reach here, there's no active Supabase session
+        if (cachedUser?.id && !isAuthenticatingRef.current) {
+          // If we have a cached admin, keep it but try to verify background
+          if (cachedRole === 'admin' && isMounted) {
+            // Background verification, don't block
+            lookupProfileById(cachedUser.id).then(verifyAdmin => {
+              if (isMounted && verifyAdmin?.role?.toLowerCase() === 'admin') {
+                const adminUser = toAdminSession(verifyAdmin);
+                setCurrentUser(adminUser);
+                localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(adminUser));
               }
-              setAuthLoading(false);
-            }
+            }).catch(() => {});
+            
+            if (isMounted) setAuthLoading(false);
             return;
           }
 
-          if (cachedRole === 'admin' && isMounted) {
-            const verifyAdmin = await lookupProfileById(cachedUser.id);
-            if (verifyAdmin?.role?.toLowerCase() === 'admin') {
-              const adminUser = toAdminSession(verifyAdmin);
-              setCurrentUser(adminUser);
-              localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(adminUser));
-            }
-            setAuthLoading(false);
+          if ((cachedRole === 'student' || cachedRole === 'teacher') && isMounted) {
+            // Restore from cache but don't block auth screen
+            restoreAcademyUserById(cachedUser.id, cachedRole as 'student' | 'teacher')
+              .then(restored => {
+                if (isMounted && restored) {
+                  setCurrentUser(restored);
+                  localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(restored));
+                }
+              }).catch(() => {});
+            
+            if (isMounted) setAuthLoading(false);
             return;
           }
         }
 
-        if (isMounted && cachedRole !== 'admin') {
-          setCurrentUser(null);
-          localStorage.removeItem(STORAGE_KEYS.USER);
+        // Final fallback: clear loading and user if no session found
+        if (isMounted) {
+          if (!isAuthenticatingRef.current) {
+            setCurrentUser(null);
+            localStorage.removeItem(STORAGE_KEYS.USER);
+          }
+          setAuthLoading(false);
         }
       } catch (err) {
         console.error('Auth init error:', err);
