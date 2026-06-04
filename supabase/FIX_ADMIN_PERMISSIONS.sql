@@ -1,12 +1,28 @@
 -- =============================================================================
--- ULTIMATE ADMIN AUTH & PERMISSIONS FIX (v2 - PERSISTENCE & REALTIME)
+-- ULTIMATE ADMIN AUTH & PERMISSIONS FIX (v4 - THE ONE-SHOT FIX)
 -- RUN THIS IN SUPABASE → SQL Editor → Run
 -- =============================================================================
 
--- 1. Ensure password column exists in profiles
+-- 1. Ensure password column exists
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS password text;
 
--- 2. Fix Profile Lookup RPC
+-- 2. CREATE SECURITY DEFINER ADMIN CHECKER
+-- This function bypasses RLS to check roles, preventing infinite recursion.
+CREATE OR REPLACE FUNCTION public.check_is_admin(p_uid uuid)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  RETURN EXISTS (
+    SELECT 1 FROM public.profiles
+    WHERE id = p_uid AND lower(role::text) = 'admin'
+  );
+END;
+$$;
+
+-- 3. Fix Profile Lookup RPC
 CREATE OR REPLACE FUNCTION public.lookup_profile_for_login(p_email text)
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -36,7 +52,7 @@ BEGIN
 END;
 $$;
 
--- 3. Fix Academy User Authentication RPC
+-- 4. Fix Academy User Authentication RPC
 CREATE OR REPLACE FUNCTION public.authenticate_academy_user(p_email text, p_password text)
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -108,8 +124,7 @@ BEGIN
 END;
 $$;
 
--- 4. Grant absolute access to admins for all tables
--- We use a subquery in USING/WITH CHECK to ensure the role is checked directly against the profiles table
+-- 5. APPLY BULLETPROOF POLICIES
 DO $$
 DECLARE
     t text;
@@ -122,20 +137,32 @@ BEGIN
     FOREACH t IN ARRAY tables LOOP
         EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
         EXECUTE format('DROP POLICY IF EXISTS "Admins have full access" ON public.%I', t);
+        EXECUTE format('DROP POLICY IF EXISTS "Public read for authenticated" ON public.%I', t);
+        
+        -- Admin Access Policy
         EXECUTE format('
             CREATE POLICY "Admins have full access" ON public.%I
             FOR ALL TO authenticated
-            USING (
-                COALESCE((SELECT lower(role::text) FROM public.profiles WHERE id = auth.uid()), '''') = ''admin''
-            )
-            WITH CHECK (
-                COALESCE((SELECT lower(role::text) FROM public.profiles WHERE id = auth.uid()), '''') = ''admin''
-            )
+            USING (public.check_is_admin(auth.uid()))
+            WITH CHECK (public.check_is_admin(auth.uid()))
         ', t);
+
+        -- Self Read Policy for non-admins
+        IF t = 'profiles' THEN
+            EXECUTE format('CREATE POLICY "Self read" ON public.%I FOR SELECT TO authenticated USING (auth.uid() = id)', t);
+        ELSIF t = 'students' THEN
+            EXECUTE format('CREATE POLICY "Self read student" ON public.%I FOR SELECT TO authenticated USING (auth.uid() = id)', t);
+        ELSIF t = 'teachers' THEN
+            EXECUTE format('CREATE POLICY "Self read teacher" ON public.%I FOR SELECT TO authenticated USING (auth.uid() = id)', t);
+        END IF;
     END LOOP;
 END $$;
 
--- 5. Fix for existing admins: ensure they have a profile
+-- 6. Public Read for essential tables (to ensure app loads)
+CREATE POLICY "Public read announcements" ON public.announcements FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Public read batches" ON public.batches FOR SELECT TO authenticated USING (true);
+
+-- 7. Fix for existing admins
 INSERT INTO public.profiles (id, email, role, name)
 SELECT 
     id, 
@@ -145,12 +172,14 @@ SELECT
 FROM auth.users
 ON CONFLICT (id) DO UPDATE SET role = 'admin';
 
--- 6. Grant execution permissions
-GRANT EXECUTE ON FUNCTION public.lookup_profile_for_login(text) TO anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.authenticate_academy_user(text, text) TO anon, authenticated;
+-- 8. Enable Realtime with Conflict Handling
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime') THEN
+        CREATE PUBLICATION supabase_realtime;
+    END IF;
+END $$;
 
--- 7. Enable Realtime for all tables
--- This ensures that changes made by one role are instantly seen by others
 DO $$
 DECLARE
     t text;
@@ -160,33 +189,14 @@ DECLARE
         'fee_payments', 'study_materials', 'exam_results'
     ];
 BEGIN
-    -- Create publication if it doesn't exist
-    IF NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime') THEN
-        CREATE PUBLICATION supabase_realtime;
-    END IF;
-
-    -- Add each table to publication individually, ignoring errors if already present
     FOREACH t IN ARRAY tables LOOP
         BEGIN
             EXECUTE format('ALTER PUBLICATION supabase_realtime ADD TABLE public.%I', t);
-        EXCEPTION
-            WHEN duplicate_object THEN
-                -- Table is already in publication, do nothing
-                NULL;
-            WHEN OTHERS THEN
-                -- Other errors, just log or ignore
-                RAISE NOTICE 'Could not add table % to realtime publication: %', t, SQLERRM;
-        END;
+        EXCEPTION WHEN OTHERS THEN NULL; END;
     END LOOP;
 END $$;
 
--- 8. Standard Read Access for Everyone (Announcements, Profiles, Batches)
--- These are necessary for initial state load
-DROP POLICY IF EXISTS "Everyone can view announcements" ON public.announcements;
-CREATE POLICY "Everyone can view announcements" ON public.announcements FOR SELECT TO authenticated USING (true);
-
-DROP POLICY IF EXISTS "Everyone can view batches" ON public.batches;
-CREATE POLICY "Everyone can view batches" ON public.batches FOR SELECT TO authenticated USING (true);
-
-DROP POLICY IF EXISTS "Everyone can view profiles" ON public.profiles;
-CREATE POLICY "Everyone can view profiles" ON public.profiles FOR SELECT TO authenticated USING (true);
+-- 9. Grant execution permissions
+GRANT EXECUTE ON FUNCTION public.check_is_admin(uuid) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.lookup_profile_for_login(text) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.authenticate_academy_user(text, text) TO anon, authenticated;
