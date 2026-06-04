@@ -58,6 +58,7 @@ interface AppContextType {
   authLoading: boolean;
   isInstallable: boolean;
   installApp: () => Promise<void>;
+  refresh: () => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -105,6 +106,239 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [activeTab, setActiveTab] = useState(() => {
     return localStorage.getItem(STORAGE_KEYS.ACTIVE_TAB) || 'dashboard';
   });
+
+  const applyFetchedData = useCallback((
+    profiles: Record<string, unknown>[],
+    studentsRes: { data: Record<string, unknown>[] | null },
+    teachersRes: { data: Record<string, unknown>[] | null },
+    batchesRes: { data: Record<string, unknown>[] | null },
+    announcementsRes: { data: Record<string, unknown>[] | null },
+    examsRes: { data: Record<string, unknown>[] | null },
+    attendanceRes: { data: Record<string, unknown>[] | null },
+    feePaymentsRes: { data: Record<string, unknown>[] | null },
+    studyMaterialsRes: { data: Record<string, unknown>[] | null },
+    examResultsRes: { data: Record<string, unknown>[] | null }
+  ) => {
+    if (studentsRes.data) {
+      const formatted: Student[] = studentsRes.data.map((s) => {
+        const p = profiles.find((prof) => prof.id === s.id) || {};
+        return {
+          ...s,
+          id: String(s.id),
+          name: (p.name as string) || 'Unknown',
+          email: (p.email as string) || '',
+          phone: (p.phone as string) || '',
+          role: 'student' as const,
+          studentId: String(s.student_id || ''),
+          batchId: String(s.batch_id || ''),
+          category: (s.category as Category) || '11th',
+          stream: (s.stream as Stream) || 'PCM',
+          parentName: (s.parent_name as string) || '',
+          parentPhone: (s.parent_phone as string) || '',
+          attendancePercent: Number(s.attendance_percent) || 0,
+          performanceScore: Number(s.performance_score) || 0,
+          subjects: (s.subjects as SubjectName[]) || [],
+          admissionDate: (s.admission_date as string) || '',
+          totalFees: Number(s.total_fees) || 0,
+          paidFees: Number(s.paid_fees) || 0,
+          notes: (s.notes as string) || '',
+          password: (s.password as string) || '',
+        } as Student;
+      });
+      setStudents(formatted);
+    }
+
+    if (teachersRes.data) {
+      const formatted: Teacher[] = teachersRes.data.map((t) => {
+        const p = profiles.find((prof) => prof.id === t.id) || {};
+        return {
+          ...t,
+          id: String(t.id),
+          name: (p.name as string) || 'Unknown',
+          email: (p.email as string) || '',
+          phone: (p.phone as string) || '',
+          role: 'teacher' as const,
+          teacherId: String(t.teacher_id || ''),
+          subject: (t.subject as SubjectName) || 'Physics',
+          assignedCategories: (t.assigned_categories as string[]) || [],
+          permissions: (t.permissions as string[]) || [],
+          password: (t.password as string) || '',
+        } as Teacher;
+      });
+      setTeachers(formatted);
+    }
+
+    if (batchesRes.data) {
+      setBatches(
+        batchesRes.data.map((b) => ({
+          ...b,
+          id: String(b.id),
+          studentIds: (b.student_ids as string[]) || [],
+          teacherIds: (b.teacher_ids as string[]) || [],
+        })) as Batch[]
+      );
+    }
+
+    if (announcementsRes.data) {
+      setAnnouncements(
+        announcementsRes.data.map((a) => ({
+          ...a,
+          id: String(a.id),
+          authorId: a.author_id,
+          authorName: a.author_name,
+          targetRole: a.target_role,
+          targetBatch: a.target_batch,
+          createdAt: a.created_at,
+          referenceId: a.reference_id,
+        })) as Announcement[]
+      );
+    }
+
+    if (examsRes.data) {
+      setExams(
+        examsRes.data.map((e) => ({
+          ...e,
+          id: String(e.id),
+          duration: Number(e.duration) || 0,
+          teacherId: e.teacher_id,
+          batchId: e.batch_id,
+          scheduledAt: e.scheduled_at,
+          questions: (e.questions as MCQQuestion[]) || [],
+          chapterTags: (e.chapter_tags as string[]) || [],
+          hasNegativeMarking: e.has_negative_marking,
+        })) as Exam[]
+      );
+    }
+
+    if (attendanceRes.data) {
+      setAttendance(
+        attendanceRes.data.map((at) => ({
+          ...at,
+          id: String(at.id),
+          batchId: at.batch_id,
+          teacherId: at.teacher_id,
+          records: (at.records as { studentId: string; present: boolean }[]) || [],
+        })) as AttendanceRecord[]
+      );
+    }
+
+    if (feePaymentsRes.data) {
+      setFeePayments(
+        feePaymentsRes.data.map((p) => ({
+          ...p,
+          id: String(p.id),
+          amount: Number(p.amount) || 0,
+          studentId: p.student_id,
+          receiptNo: p.receipt_no,
+        })) as FeePayment[]
+      );
+    }
+
+    if (studyMaterialsRes.data) {
+      setStudyMaterials(
+        studyMaterialsRes.data.map((m) => ({
+          ...m,
+          id: String(m.id),
+          batchId: m.batch_id,
+          teacherId: m.teacher_id,
+          fileUrl: m.file_url,
+          fileName: m.file_name,
+          uploadedAt: m.uploaded_at,
+        })) as StudyMaterial[]
+      );
+    }
+
+    if (examResultsRes.data) {
+      setExamResults(
+        examResultsRes.data.map((r) => ({
+          ...r,
+          id: String(r.id),
+          examId: r.exam_id,
+          studentId: r.student_id,
+          answers: (r.answers as number[]) || [],
+          score: Number(r.score) || 0,
+          totalMarks: Number(r.total_marks) || 0,
+          accuracy: Number(r.accuracy) || 0,
+          rank: r.rank ? Number(r.rank) : undefined,
+          submittedAt: r.submitted_at,
+          weakChapters: (r.weak_chapters as string[]) || [],
+        })) as ExamResult[]
+      );
+    }
+  }, []);
+
+  const refreshData = useCallback(async (options?: { showIndicator?: boolean }) => {
+    if (!currentUser?.id) {
+      setLoading(false);
+      return;
+    }
+
+    const generation = ++syncGenerationRef.current;
+    if (options?.showIndicator) {
+      setLoading(true);
+    }
+
+    try {
+      const fetchTable = async (table: string, query: any) => {
+        try {
+          const res = (await withSyncTimeout(query)) as { data: any; error: any };
+          if (res.error) {
+            console.warn(`Error fetching ${table}:`, res.error.message);
+            return { data: null, error: res.error };
+          }
+          return { data: res.data, error: null };
+        } catch (e: any) {
+          console.warn(`Timeout or exception fetching ${table}:`, e.message);
+          return { data: null, error: e };
+        }
+      };
+
+      const [
+        profilesRes,
+        studentsRes,
+        teachersRes,
+        batchesRes,
+        announcementsRes,
+        examsRes,
+        attendanceRes,
+        feePaymentsRes,
+        studyMaterialsRes,
+        examResultsRes,
+      ] = await Promise.all([
+        fetchTable('profiles', supabase.from('profiles').select('*')),
+        fetchTable('students', supabase.from('students').select('*')),
+        fetchTable('teachers', supabase.from('teachers').select('*')),
+        fetchTable('batches', supabase.from('batches').select('*')),
+        fetchTable('announcements', supabase.from('announcements').select('*').order('created_at', { ascending: false })),
+        fetchTable('exams', supabase.from('exams').select('*').order('scheduled_at', { ascending: false })),
+        fetchTable('attendance', supabase.from('attendance').select('*')),
+        fetchTable('fee_payments', supabase.from('fee_payments').select('*').order('date', { ascending: false })),
+        fetchTable('study_materials', supabase.from('study_materials').select('*').order('uploaded_at', { ascending: false })),
+        fetchTable('exam_results', supabase.from('exam_results').select('*').order('submitted_at', { ascending: false })),
+      ]);
+
+      if (generation !== syncGenerationRef.current) return;
+
+      applyFetchedData(
+        profilesRes.data || [],
+        studentsRes,
+        teachersRes,
+        batchesRes,
+        announcementsRes,
+        examsRes,
+        attendanceRes,
+        feePaymentsRes,
+        studyMaterialsRes,
+        examResultsRes
+      );
+    } catch (err) {
+      console.error('Unified data sync error:', err);
+    } finally {
+      if (generation === syncGenerationRef.current) {
+        setLoading(false);
+      }
+    }
+  }, [currentUser?.id, applyFetchedData]);
 
   // Unified Auth State Listener
   useEffect(() => {
@@ -294,404 +528,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return;
     }
 
-    let cancelled = false;
-    const syncGeneration = ++syncGenerationRef.current;
-
-    const applyFetchedData = (
-      profiles: Record<string, unknown>[],
-      studentsRes: { data: Record<string, unknown>[] | null },
-      teachersRes: { data: Record<string, unknown>[] | null },
-      batchesRes: { data: Record<string, unknown>[] | null },
-      announcementsRes: { data: Record<string, unknown>[] | null },
-      examsRes: { data: Record<string, unknown>[] | null },
-      attendanceRes: { data: Record<string, unknown>[] | null },
-      feePaymentsRes: { data: Record<string, unknown>[] | null },
-      studyMaterialsRes: { data: Record<string, unknown>[] | null },
-      examResultsRes: { data: Record<string, unknown>[] | null }
-    ) => {
-      if (cancelled) return;
-
-      if (studentsRes.data) {
-        const formatted: Student[] = studentsRes.data.map((s) => {
-          const p = profiles.find((prof) => prof.id === s.id) || {};
-          return {
-            ...s,
-            id: String(s.id),
-            name: (p.name as string) || 'Unknown',
-            email: (p.email as string) || '',
-            phone: (p.phone as string) || '',
-            role: 'student' as const,
-            studentId: String(s.student_id || ''),
-            batchId: String(s.batch_id || ''),
-            category: (s.category as Category) || '11th',
-            stream: (s.stream as Stream) || 'PCM',
-            parentName: (s.parent_name as string) || '',
-            parentPhone: (s.parent_phone as string) || '',
-            attendancePercent: Number(s.attendance_percent) || 0,
-            performanceScore: Number(s.performance_score) || 0,
-            subjects: (s.subjects as SubjectName[]) || [],
-            admissionDate: (s.admission_date as string) || '',
-            totalFees: Number(s.total_fees) || 0,
-            paidFees: Number(s.paid_fees) || 0,
-            notes: (s.notes as string) || '',
-            password: (s.password as string) || '',
-          } as Student;
-        });
-        setStudents(formatted);
-      }
-
-      if (teachersRes.data) {
-        const formatted: Teacher[] = teachersRes.data.map((t) => {
-          const p = profiles.find((prof) => prof.id === t.id) || {};
-          return {
-            ...t,
-            id: String(t.id),
-            name: (p.name as string) || 'Unknown',
-            email: (p.email as string) || '',
-            phone: (p.phone as string) || '',
-            role: 'teacher' as const,
-            teacherId: String(t.teacher_id || ''),
-            subject: (t.subject as SubjectName) || 'Physics',
-            assignedCategories: (t.assigned_categories as string[]) || [],
-            permissions: (t.permissions as string[]) || [],
-            password: (t.password as string) || '',
-          } as Teacher;
-        });
-        setTeachers(formatted);
-      }
-
-      if (batchesRes.data) {
-        setBatches(
-          batchesRes.data.map((b) => ({
-            ...b,
-            id: String(b.id),
-            studentIds: (b.student_ids as string[]) || [],
-            teacherIds: (b.teacher_ids as string[]) || [],
-          })) as Batch[]
-        );
-      }
-
-      if (announcementsRes.data) {
-        setAnnouncements(
-          announcementsRes.data.map((a) => ({
-            ...a,
-            id: String(a.id),
-            authorId: a.author_id,
-            authorName: a.author_name,
-            targetRole: a.target_role,
-            targetBatch: a.target_batch,
-            createdAt: a.created_at,
-            referenceId: a.reference_id,
-          })) as Announcement[]
-        );
-      }
-
-      if (examsRes.data) {
-        setExams(
-          examsRes.data.map((e) => ({
-            ...e,
-            id: String(e.id),
-            duration: Number(e.duration) || 0,
-            teacherId: e.teacher_id,
-            batchId: e.batch_id,
-            scheduledAt: e.scheduled_at,
-            questions: (e.questions as MCQQuestion[]) || [],
-            chapterTags: (e.chapter_tags as string[]) || [],
-            hasNegativeMarking: e.has_negative_marking,
-          })) as Exam[]
-        );
-      }
-
-      if (attendanceRes.data) {
-        setAttendance(
-          attendanceRes.data.map((at) => ({
-            ...at,
-            id: String(at.id),
-            batchId: at.batch_id,
-            teacherId: at.teacher_id,
-            records: (at.records as { studentId: string; present: boolean }[]) || [],
-          })) as AttendanceRecord[]
-        );
-      }
-
-      if (feePaymentsRes.data) {
-        setFeePayments(
-          feePaymentsRes.data.map((p) => ({
-            ...p,
-            id: String(p.id),
-            amount: Number(p.amount) || 0,
-            studentId: p.student_id,
-            receiptNo: p.receipt_no,
-          })) as FeePayment[]
-        );
-      }
-
-      if (studyMaterialsRes.data) {
-        setStudyMaterials(
-          studyMaterialsRes.data.map((m) => ({
-            ...m,
-            id: String(m.id),
-            batchId: m.batch_id,
-            teacherId: m.teacher_id,
-            fileUrl: m.file_url,
-            fileName: m.file_name,
-            uploadedAt: m.uploaded_at,
-          })) as StudyMaterial[]
-        );
-      }
-
-      if (examResultsRes.data) {
-        setExamResults(
-          examResultsRes.data.map((r) => ({
-            ...r,
-            id: String(r.id),
-            examId: r.exam_id,
-            studentId: r.student_id,
-            answers: (r.answers as number[]) || [],
-            score: Number(r.score) || 0,
-            totalMarks: Number(r.total_marks) || 0,
-            accuracy: Number(r.accuracy) || 0,
-            rank: r.rank ? Number(r.rank) : undefined,
-            submittedAt: r.submitted_at,
-            weakChapters: (r.weak_chapters as string[]) || [],
-          })) as ExamResult[]
-        );
-      }
-    };
-
-    const refreshData = async (options?: { showIndicator?: boolean }) => {
-      if (!currentUser?.id) {
-        setLoading(false);
-        return;
-      }
-
-      const generation = syncGeneration;
-      if (options?.showIndicator) {
-        setLoading(true);
-      }
-
-      try {
-        const [
-          profilesRes,
-          studentsRes,
-          teachersRes,
-          batchesRes,
-          announcementsRes,
-          examsRes,
-          attendanceRes,
-          feePaymentsRes,
-          studyMaterialsRes,
-          examResultsRes,
-        ] = await withSyncTimeout(
-          Promise.all([
-            supabase.from('profiles').select('*'),
-            supabase.from('students').select('*'),
-            supabase.from('teachers').select('*'),
-            supabase.from('batches').select('*'),
-            supabase.from('announcements').select('*').order('created_at', { ascending: false }),
-            supabase.from('exams').select('*').order('scheduled_at', { ascending: false }),
-            supabase.from('attendance').select('*'),
-            supabase.from('fee_payments').select('*').order('date', { ascending: false }),
-            supabase.from('study_materials').select('*').order('uploaded_at', { ascending: false }),
-            supabase.from('exam_results').select('*').order('submitted_at', { ascending: false }),
-          ])
-        );
-
-        if (cancelled || generation !== syncGenerationRef.current) return;
-
-        applyFetchedData(
-          profilesRes.data || [],
-          studentsRes,
-          teachersRes,
-          batchesRes,
-          announcementsRes,
-          examsRes,
-          attendanceRes,
-          feePaymentsRes,
-          studyMaterialsRes,
-          examResultsRes
-        );
-      } catch (err) {
-        console.error('Data sync error:', err);
-      } finally {
-        if (generation === syncGenerationRef.current) {
-          setLoading(false);
-        }
-      }
-    };
-
     void refreshData();
-
-    const refreshStudents = async () => {
-      const { data } = await supabase.from('students').select('*');
-      if (!data || cancelled) return;
-      const { data: profiles } = await supabase.from('profiles').select('*');
-      const profileList = profiles || [];
-      const formatted: Student[] = data.map((s) => {
-        const p = profileList.find((prof) => prof.id === s.id) || {};
-        return {
-          ...s,
-          id: String(s.id),
-          name: p.name || 'Unknown',
-          email: p.email || '',
-          phone: p.phone || '',
-          role: 'student' as const,
-          studentId: String(s.student_id || ''),
-          batchId: String(s.batch_id || ''),
-          category: (s.category as Category) || '11th',
-          stream: (s.stream as Stream) || 'PCM',
-          parentName: s.parent_name || '',
-          parentPhone: s.parent_phone || '',
-          attendancePercent: Number(s.attendance_percent) || 0,
-          performanceScore: Number(s.performance_score) || 0,
-          subjects: (s.subjects as SubjectName[]) || [],
-          admissionDate: s.admission_date || '',
-          totalFees: Number(s.total_fees) || 0,
-          paidFees: Number(s.paid_fees) || 0,
-          notes: s.notes || '',
-          password: s.password || '',
-        } as Student;
-      });
-      setStudents(formatted);
-    };
-
-    const refreshTeachers = async () => {
-      const { data } = await supabase.from('teachers').select('*');
-      if (!data || cancelled) return;
-      const { data: profiles } = await supabase.from('profiles').select('*');
-      const profileList = profiles || [];
-      const formatted: Teacher[] = data.map((t) => {
-        const p = profileList.find((prof) => prof.id === t.id) || {};
-        return {
-          ...t,
-          id: String(t.id),
-          name: p.name || 'Unknown',
-          email: p.email || '',
-          phone: p.phone || '',
-          role: 'teacher' as const,
-          teacherId: String(t.teacher_id || ''),
-          subject: (t.subject as SubjectName) || 'Physics',
-          assignedCategories: t.assigned_categories || [],
-          permissions: t.permissions || [],
-          password: t.password || '',
-        } as Teacher;
-      });
-      setTeachers(formatted);
-    };
 
     const tables = [
       { name: 'profiles', fetcher: () => void refreshData() },
-      { name: 'students', fetcher: refreshStudents },
-      { name: 'teachers', fetcher: refreshTeachers },
-      { name: 'batches', fetcher: async () => {
-        const { data } = await supabase.from('batches').select('*');
-        if (data && !cancelled) {
-          setBatches(
-            data.map((b) => ({
-              ...b,
-              id: String(b.id),
-              studentIds: b.student_ids || [],
-              teacherIds: b.teacher_ids || [],
-            })) as Batch[]
-          );
-        }
-      }},
-      { name: 'announcements', fetcher: async () => {
-        const { data } = await supabase.from('announcements').select('*').order('created_at', { ascending: false });
-        if (data && !cancelled) {
-          setAnnouncements(
-            data.map((a) => ({
-              ...a,
-              id: String(a.id),
-              authorId: a.author_id,
-              authorName: a.author_name,
-              targetRole: a.target_role,
-              targetBatch: a.target_batch,
-              createdAt: a.created_at,
-              referenceId: a.reference_id,
-            })) as Announcement[]
-          );
-        }
-      }},
-      { name: 'exams', fetcher: async () => {
-        const { data } = await supabase.from('exams').select('*').order('scheduled_at', { ascending: false });
-        if (data && !cancelled) {
-          setExams(
-            data.map((e) => ({
-              ...e,
-              id: String(e.id),
-              duration: Number(e.duration) || 0,
-              teacherId: e.teacher_id,
-              batchId: e.batch_id,
-              scheduledAt: e.scheduled_at,
-              chapterTags: e.chapter_tags || [],
-              hasNegativeMarking: e.has_negative_marking,
-            })) as Exam[]
-          );
-        }
-      }},
-      { name: 'attendance', fetcher: async () => {
-        const { data } = await supabase.from('attendance').select('*');
-        if (data && !cancelled) {
-          setAttendance(
-            data.map((at) => ({
-              ...at,
-              id: String(at.id),
-              batchId: at.batch_id,
-              teacherId: at.teacher_id,
-            })) as AttendanceRecord[]
-          );
-        }
-      }},
-      { name: 'fee_payments', fetcher: async () => {
-        const { data } = await supabase.from('fee_payments').select('*').order('date', { ascending: false });
-        if (data && !cancelled) {
-          setFeePayments(
-            data.map((p) => ({
-              ...p,
-              id: String(p.id),
-              amount: Number(p.amount) || 0,
-              studentId: p.student_id,
-              receiptNo: p.receipt_no,
-            })) as FeePayment[]
-          );
-        }
-      }},
-      { name: 'study_materials', fetcher: async () => {
-        const { data } = await supabase.from('study_materials').select('*').order('uploaded_at', { ascending: false });
-        if (data && !cancelled) {
-          setStudyMaterials(
-            data.map((m) => ({
-              ...m,
-              id: String(m.id),
-              batchId: m.batch_id,
-              teacherId: m.teacher_id,
-              fileUrl: m.file_url,
-              fileName: m.file_name,
-              uploadedAt: m.uploaded_at,
-            })) as StudyMaterial[]
-          );
-        }
-      }},
-      { name: 'exam_results', fetcher: async () => {
-        const { data } = await supabase.from('exam_results').select('*').order('submitted_at', { ascending: false });
-        if (data && !cancelled) {
-          setExamResults(
-            data.map((r) => ({
-              ...r,
-              id: String(r.id),
-              examId: r.exam_id,
-              studentId: r.student_id,
-              score: Number(r.score) || 0,
-              totalMarks: Number(r.total_marks) || 0,
-              accuracy: Number(r.accuracy) || 0,
-              rank: r.rank ? Number(r.rank) : undefined,
-              submittedAt: r.submitted_at,
-              weakChapters: (r.weak_chapters as string[]) || [],
-            })) as ExamResult[]
-          );
-        }
-      }},
+      { name: 'students', fetcher: () => void refreshData() },
+      { name: 'teachers', fetcher: () => void refreshData() },
+      { name: 'batches', fetcher: () => void refreshData() },
+      { name: 'announcements', fetcher: () => void refreshData() },
+      { name: 'exams', fetcher: () => void refreshData() },
+      { name: 'attendance', fetcher: () => void refreshData() },
+      { name: 'fee_payments', fetcher: () => void refreshData() },
+      { name: 'study_materials', fetcher: () => void refreshData() },
+      { name: 'exam_results', fetcher: () => void refreshData() },
     ];
 
     const channels = tables.map((table) =>
@@ -704,11 +553,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
 
     return () => {
-      cancelled = true;
       setLoading(false);
       channels.forEach((channel) => supabase.removeChannel(channel));
     };
-  }, [currentUser?.id]);
+  }, [currentUser?.id, refreshData]);
 
   const login = useCallback(async (email: string, password: string): Promise<LoginResult> => {
     try {
@@ -793,7 +641,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       loading,
       authLoading,
       isInstallable,
-      installApp
+      installApp,
+      refresh: () => refreshData({ showIndicator: true })
     }}>
       {children}
     </AppContext.Provider>

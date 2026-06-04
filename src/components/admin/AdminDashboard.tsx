@@ -1,7 +1,7 @@
 import React from 'react';
 import { useApp } from '../../context/AppContext';
 import { StatCard } from '../shared/StatCard';
-import { Users, GraduationCap, BookOpen, IndianRupee, TrendingUp, AlertCircle, CheckCircle2, Clock, RotateCcw } from 'lucide-react';
+import { Users, GraduationCap, BookOpen, IndianRupee, TrendingUp, AlertCircle, CheckCircle2, Clock, RotateCcw, RefreshCcw } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar, Legend, PieChart, Pie, Cell
@@ -12,7 +12,7 @@ import { format } from 'date-fns';
 import { PageHeader } from '../shared/PageHeader';
 
 export const AdminDashboard: React.FC = () => {
-  const { students, teachers, batches, feePayments, announcements, exams } = useApp();
+  const { students, teachers, batches, feePayments, announcements, exams, refresh, loading } = useApp();
 
   const totalRevenue = feePayments.reduce((s, p) => s + p.amount, 0);
   const totalFeesDue = students.reduce((s, st) => s + (st.totalFees - st.paidFees), 0);
@@ -113,7 +113,14 @@ export const AdminDashboard: React.FC = () => {
                 <p className="text-slate-500 text-xs font-medium uppercase">Quick Actions</p>
                 <div className="flex gap-2 mt-2">
                    <button className="bg-blue-600 text-white text-xs px-3 py-1.5 rounded-lg font-medium">Add Student</button>
-                   <button className="bg-slate-100 text-slate-700 text-xs px-3 py-1.5 rounded-lg font-medium">Post Announcement</button>
+                   <button 
+                     onClick={() => refresh()}
+                     disabled={loading}
+                     className="bg-slate-100 text-slate-700 text-xs px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5 hover:bg-slate-200 transition-colors disabled:opacity-50"
+                   >
+                     <RefreshCcw size={12} className={loading ? 'animate-spin' : ''} />
+                     Sync Data
+                   </button>
                    <button 
                      onClick={handleReset}
                      className="bg-red-50 text-red-600 hover:bg-red-100 text-xs px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5 transition-colors"
