@@ -109,17 +109,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const applyFetchedData = useCallback((
     profiles: Record<string, unknown>[],
-    studentsRes: { data: Record<string, unknown>[] | null },
-    teachersRes: { data: Record<string, unknown>[] | null },
-    batchesRes: { data: Record<string, unknown>[] | null },
-    announcementsRes: { data: Record<string, unknown>[] | null },
-    examsRes: { data: Record<string, unknown>[] | null },
-    attendanceRes: { data: Record<string, unknown>[] | null },
-    feePaymentsRes: { data: Record<string, unknown>[] | null },
-    studyMaterialsRes: { data: Record<string, unknown>[] | null },
-    examResultsRes: { data: Record<string, unknown>[] | null }
+    studentsRes: { data: Record<string, unknown>[] | null; error?: any },
+    teachersRes: { data: Record<string, unknown>[] | null; error?: any },
+    batchesRes: { data: Record<string, unknown>[] | null; error?: any },
+    announcementsRes: { data: Record<string, unknown>[] | null; error?: any },
+    examsRes: { data: Record<string, unknown>[] | null; error?: any },
+    attendanceRes: { data: Record<string, unknown>[] | null; error?: any },
+    feePaymentsRes: { data: Record<string, unknown>[] | null; error?: any },
+    studyMaterialsRes: { data: Record<string, unknown>[] | null; error?: any },
+    examResultsRes: { data: Record<string, unknown>[] | null; error?: any }
   ) => {
     if (studentsRes.data) {
+      console.log(`[AppContext] Loaded ${studentsRes.data.length} students`);
       const formatted: Student[] = studentsRes.data.map((s) => {
         const p = profiles.find((prof) => prof.id === s.id) || {};
         return {
@@ -146,9 +147,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         } as Student;
       });
       setStudents(formatted);
+    } else if (studentsRes.error) {
+      console.error('[AppContext] Error loading students:', studentsRes.error);
     }
 
     if (teachersRes.data) {
+      console.log(`[AppContext] Loaded ${teachersRes.data.length} teachers`);
       const formatted: Teacher[] = teachersRes.data.map((t) => {
         const p = profiles.find((prof) => prof.id === t.id) || {};
         return {
@@ -166,9 +170,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         } as Teacher;
       });
       setTeachers(formatted);
+    } else if (teachersRes.error) {
+      console.error('[AppContext] Error loading teachers:', teachersRes.error);
     }
 
     if (batchesRes.data) {
+      console.log(`[AppContext] Loaded ${batchesRes.data.length} batches`);
       setBatches(
         batchesRes.data.map((b) => ({
           ...b,
@@ -177,9 +184,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           teacherIds: (b.teacher_ids as string[]) || [],
         })) as Batch[]
       );
+    } else if (batchesRes.error) {
+      console.error('[AppContext] Error loading batches:', batchesRes.error);
     }
 
     if (announcementsRes.data) {
+      console.log(`[AppContext] Loaded ${announcementsRes.data.length} announcements`);
       setAnnouncements(
         announcementsRes.data.map((a) => ({
           ...a,
@@ -192,9 +202,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           referenceId: a.reference_id,
         })) as Announcement[]
       );
+    } else if (announcementsRes.error) {
+      console.error('[AppContext] Error loading announcements:', announcementsRes.error);
     }
 
     if (examsRes.data) {
+      console.log(`[AppContext] Loaded ${examsRes.data.length} exams`);
       setExams(
         examsRes.data.map((e) => ({
           ...e,
@@ -208,9 +221,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           hasNegativeMarking: e.has_negative_marking,
         })) as Exam[]
       );
+    } else if (examsRes.error) {
+      console.error('[AppContext] Error loading exams:', examsRes.error);
     }
 
     if (attendanceRes.data) {
+      console.log(`[AppContext] Loaded ${attendanceRes.data.length} attendance records`);
       setAttendance(
         attendanceRes.data.map((at) => ({
           ...at,
@@ -220,9 +236,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           records: (at.records as { studentId: string; present: boolean }[]) || [],
         })) as AttendanceRecord[]
       );
+    } else if (attendanceRes.error) {
+      console.error('[AppContext] Error loading attendance:', attendanceRes.error);
     }
 
     if (feePaymentsRes.data) {
+      console.log(`[AppContext] Loaded ${feePaymentsRes.data.length} fee payments`);
       setFeePayments(
         feePaymentsRes.data.map((p) => ({
           ...p,
@@ -232,9 +251,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           receiptNo: p.receipt_no,
         })) as FeePayment[]
       );
+    } else if (feePaymentsRes.error) {
+      console.error('[AppContext] Error loading fee payments:', feePaymentsRes.error);
     }
 
     if (studyMaterialsRes.data) {
+      console.log(`[AppContext] Loaded ${studyMaterialsRes.data.length} study materials`);
       setStudyMaterials(
         studyMaterialsRes.data.map((m) => ({
           ...m,
@@ -246,9 +268,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           uploadedAt: m.uploaded_at,
         })) as StudyMaterial[]
       );
+    } else if (studyMaterialsRes.error) {
+      console.error('[AppContext] Error loading study materials:', studyMaterialsRes.error);
     }
 
     if (examResultsRes.data) {
+      console.log(`[AppContext] Loaded ${examResultsRes.data.length} exam results`);
       setExamResults(
         examResultsRes.data.map((r) => ({
           ...r,
@@ -264,6 +289,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           weakChapters: (r.weak_chapters as string[]) || [],
         })) as ExamResult[]
       );
+    } else if (examResultsRes.error) {
+      console.error('[AppContext] Error loading exam results:', examResultsRes.error);
     }
   }, []);
 
