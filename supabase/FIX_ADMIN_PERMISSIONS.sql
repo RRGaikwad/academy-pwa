@@ -152,23 +152,33 @@ GRANT EXECUTE ON FUNCTION public.authenticate_academy_user(text, text) TO anon, 
 -- 7. Enable Realtime for all tables
 -- This ensures that changes made by one role are instantly seen by others
 DO $$
+DECLARE
+    t text;
+    tables text[] := ARRAY[
+        'profiles', 'students', 'teachers', 'batches', 
+        'announcements', 'exams', 'attendance', 
+        'fee_payments', 'study_materials', 'exam_results'
+    ];
 BEGIN
+    -- Create publication if it doesn't exist
     IF NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime') THEN
         CREATE PUBLICATION supabase_realtime;
     END IF;
-END $$;
 
-ALTER PUBLICATION supabase_realtime ADD TABLE 
-    public.profiles, 
-    public.students, 
-    public.teachers, 
-    public.batches, 
-    public.announcements, 
-    public.exams, 
-    public.attendance, 
-    public.fee_payments, 
-    public.study_materials, 
-    public.exam_results;
+    -- Add each table to publication individually, ignoring errors if already present
+    FOREACH t IN ARRAY tables LOOP
+        BEGIN
+            EXECUTE format('ALTER PUBLICATION supabase_realtime ADD TABLE public.%I', t);
+        EXCEPTION
+            WHEN duplicate_object THEN
+                -- Table is already in publication, do nothing
+                NULL;
+            WHEN OTHERS THEN
+                -- Other errors, just log or ignore
+                RAISE NOTICE 'Could not add table % to realtime publication: %', t, SQLERRM;
+        END;
+    END LOOP;
+END $$;
 
 -- 8. Standard Read Access for Everyone (Announcements, Profiles, Batches)
 -- These are necessary for initial state load
