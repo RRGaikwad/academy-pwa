@@ -70,26 +70,6 @@ const isMissingRpcFunction = (message: string): boolean =>
 
 const profileSelectFields = 'id, name, email, phone, role, password';
 
-async function fetchProfileWhileAuthenticated(
-  userId: string,
-  email: string
-): Promise<ProfileRow | null> {
-  const { data: byId } = await supabase
-    .from('profiles')
-    .select(profileSelectFields)
-    .eq('id', userId)
-    .maybeSingle();
-  if (byId) return byId as ProfileRow;
-
-  const cleanEmail = normalizeEmail(email);
-  const { data: byEmail } = await supabase
-    .from('profiles')
-    .select(profileSelectFields)
-    .ilike('email', cleanEmail)
-    .maybeSingle();
-  return (byEmail as ProfileRow | null) ?? null;
-}
-
 async function lookupProfileViaAdminAuthRpc(
   cleanEmail: string,
   password: string
