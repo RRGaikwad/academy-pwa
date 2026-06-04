@@ -138,40 +138,26 @@ export const lookupProfileForLogin = async (email: string): Promise<ProfileRow |
   return findProfileByEmailDirect(cleanEmail);
 };
 
-/** Resolves a profiles row before login using RPC, Auth session, or admin password RPC. */
+/** Resolves a profiles row before login using RPC or simple lookup. Lean and fast. */
 export const resolveProfileForLogin = async (
   email: string,
-  password: string
+  password?: string
 ): Promise<ProfileRow | null> => {
   const cleanEmail = normalizeEmail(email);
-  const cleanPassword = normalizePassword(password);
   if (!cleanEmail) return null;
 
-  let profile = await lookupProfileForLogin(cleanEmail);
+  // 1. Primary path: RPC lookup (Fastest, bypasses RLS)
+  const profile = await lookupProfileForLogin(cleanEmail);
   if (profile) return profile;
 
-  if (cleanPassword) {
-    profile = await lookupProfileViaAdminAuthRpc(cleanEmail, cleanPassword);
-    if (profile) return profile;
-
-    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
-      email: cleanEmail,
-      password: cleanPassword,
-    });
-
-    if (!authError && authData.user) {
-      profile = await lookupProfileById(authData.user.id);
-      if (profile) return profile;
-
-      profile = await fetchProfileWhileAuthenticated(
-        authData.user.id,
-        authData.user.email ?? cleanEmail
-      );
-      if (profile) return profile;
-    }
+  // 2. Fallback for admin-only password RPC (if applicable)
+  if (password) {
+    const adminProfile = await lookupProfileViaAdminAuthRpc(cleanEmail, password);
+    if (adminProfile) return adminProfile;
   }
 
-  return null;
+  // 3. Last resort: Direct table lookup (May fail due to RLS if not authenticated)
+  return findProfileByEmailDirect(cleanEmail);
 };
 
 export const lookupProfileById = async (userId: string): Promise<ProfileRow | null> => {

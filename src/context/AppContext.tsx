@@ -603,41 +603,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const cleanEmail = normalizeEmail(email);
       const cleanPassword = password.trim();
 
-      // 1. Resolve profile (RPC, profiles.password RPC, or Supabase Auth + RLS)
-      const profile = await resolveProfileForLogin(cleanEmail, password);
+      // 1. Resolve profile (RPC is fast)
+      const profile = await resolveProfileForLogin(cleanEmail, cleanPassword);
 
       if (!profile) {
         return {
           ok: false,
-          reason:
-            'Admin account not found. To fix this: 1. Go to Supabase SQL Editor. 2. Run the "FIX_ADMIN_PERMISSIONS.sql" script. 3. Ensure your email is in the "profiles" table with role="admin".',
+          reason: 'Account not found. Please check your email or contact support.',
         };
       }
 
       const role = profile.role?.toLowerCase();
 
-      // 2. Handle ADMIN Login (any profiles row with role = admin)
+      // 2. Optimized Flow: Handle ADMIN / AUTH-ENABLED users immediately
+      // If we have a profile and it's an admin, we MUST use Supabase Auth.
       if (role === 'admin') {
-        const adminResult = await authenticateAdminUser(profile, cleanEmail, password);
-        if (!adminResult.ok) {
+        const adminResult = await authenticateAdminUser(profile, cleanEmail, cleanPassword);
+        if (adminResult.ok) {
+          setCurrentUser(adminResult.user);
+          localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(adminResult.user));
+          setActiveTab('dashboard');
           return adminResult;
         }
-
-        setCurrentUser(adminResult.user);
-        localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(adminResult.user));
-        setActiveTab('dashboard');
         return adminResult;
       }
 
-      // 3. Handle STUDENT/TEACHER Login (Uses performAcademyLogin which checks respective tables)
+      // 3. Fallback for Student/Teacher (might use RPC-based password verification)
       const academyResult = await performAcademyLogin(cleanEmail, cleanPassword);
-      if (!academyResult.ok) {
-        return academyResult;
+      if (academyResult.ok) {
+        setCurrentUser(academyResult.user);
+        localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(academyResult.user));
+        setActiveTab('dashboard');
       }
-
-      setCurrentUser(academyResult.user);
-      localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(academyResult.user));
-      setActiveTab('dashboard');
       return academyResult;
     } catch (err) {
       console.error('Unified Login Error:', err);
