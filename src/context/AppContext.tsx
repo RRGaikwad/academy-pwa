@@ -1,5 +1,8 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
-import { User, Student, Teacher, Batch, AttendanceRecord, Exam, ExamResult, FeePayment, Announcement, StudyMaterial } from '../types';
+import { 
+  User, Student, Teacher, Batch, AttendanceRecord, Exam, ExamResult, FeePayment, Announcement, StudyMaterial,
+  Category, Stream, SubjectName, MCQQuestion 
+} from '../types';
 import { supabase } from '../lib/supabase';
 import {
   type AcademySessionUser,
@@ -302,7 +305,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       announcementsRes: { data: Record<string, unknown>[] | null },
       examsRes: { data: Record<string, unknown>[] | null },
       attendanceRes: { data: Record<string, unknown>[] | null },
-      feePaymentsRes: { data: Record<string, unknown>[] | null }
+      feePaymentsRes: { data: Record<string, unknown>[] | null },
+      studyMaterialsRes: { data: Record<string, unknown>[] | null },
+      examResultsRes: { data: Record<string, unknown>[] | null }
     ) => {
       if (cancelled) return;
 
@@ -311,23 +316,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const p = profiles.find((prof) => prof.id === s.id) || {};
           return {
             ...s,
+            id: String(s.id),
             name: (p.name as string) || 'Unknown',
             email: (p.email as string) || '',
             phone: (p.phone as string) || '',
             role: 'student' as const,
-            studentId: s.student_id,
-            batchId: s.batch_id,
-            parentName: s.parent_name,
-            parentPhone: s.parent_phone,
+            studentId: String(s.student_id || ''),
+            batchId: String(s.batch_id || ''),
+            category: (s.category as Category) || '11th',
+            stream: (s.stream as Stream) || 'PCM',
+            parentName: (s.parent_name as string) || '',
+            parentPhone: (s.parent_phone as string) || '',
             attendancePercent: Number(s.attendance_percent) || 0,
             performanceScore: Number(s.performance_score) || 0,
-            subjects: (s.subjects as string[]) || [],
+            subjects: (s.subjects as SubjectName[]) || [],
             admissionDate: (s.admission_date as string) || '',
             totalFees: Number(s.total_fees) || 0,
             paidFees: Number(s.paid_fees) || 0,
             notes: (s.notes as string) || '',
             password: (s.password as string) || '',
-          };
+          } as Student;
         });
         setStudents(formatted);
       }
@@ -337,15 +345,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const p = profiles.find((prof) => prof.id === t.id) || {};
           return {
             ...t,
+            id: String(t.id),
             name: (p.name as string) || 'Unknown',
             email: (p.email as string) || '',
             phone: (p.phone as string) || '',
             role: 'teacher' as const,
-            teacherId: t.teacher_id,
+            teacherId: String(t.teacher_id || ''),
+            subject: (t.subject as SubjectName) || 'Physics',
             assignedCategories: (t.assigned_categories as string[]) || [],
             permissions: (t.permissions as string[]) || [],
             password: (t.password as string) || '',
-          };
+          } as Teacher;
         });
         setTeachers(formatted);
       }
@@ -354,6 +364,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setBatches(
           batchesRes.data.map((b) => ({
             ...b,
+            id: String(b.id),
             studentIds: (b.student_ids as string[]) || [],
             teacherIds: (b.teacher_ids as string[]) || [],
           })) as Batch[]
@@ -364,6 +375,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setAnnouncements(
           announcementsRes.data.map((a) => ({
             ...a,
+            id: String(a.id),
             authorId: a.author_id,
             authorName: a.author_name,
             targetRole: a.target_role,
@@ -378,9 +390,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setExams(
           examsRes.data.map((e) => ({
             ...e,
+            id: String(e.id),
+            duration: Number(e.duration) || 0,
             teacherId: e.teacher_id,
             batchId: e.batch_id,
             scheduledAt: e.scheduled_at,
+            questions: (e.questions as MCQQuestion[]) || [],
             chapterTags: (e.chapter_tags as string[]) || [],
             hasNegativeMarking: e.has_negative_marking,
           })) as Exam[]
@@ -391,8 +406,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setAttendance(
           attendanceRes.data.map((at) => ({
             ...at,
+            id: String(at.id),
             batchId: at.batch_id,
             teacherId: at.teacher_id,
+            records: (at.records as { studentId: string; present: boolean }[]) || [],
           })) as AttendanceRecord[]
         );
       }
@@ -401,9 +418,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setFeePayments(
           feePaymentsRes.data.map((p) => ({
             ...p,
+            id: String(p.id),
+            amount: Number(p.amount) || 0,
             studentId: p.student_id,
             receiptNo: p.receipt_no,
           })) as FeePayment[]
+        );
+      }
+
+      if (studyMaterialsRes.data) {
+        setStudyMaterials(
+          studyMaterialsRes.data.map((m) => ({
+            ...m,
+            id: String(m.id),
+            batchId: m.batch_id,
+            teacherId: m.teacher_id,
+            fileUrl: m.file_url,
+            fileName: m.file_name,
+            uploadedAt: m.uploaded_at,
+          })) as StudyMaterial[]
+        );
+      }
+
+      if (examResultsRes.data) {
+        setExamResults(
+          examResultsRes.data.map((r) => ({
+            ...r,
+            id: String(r.id),
+            examId: r.exam_id,
+            studentId: r.student_id,
+            answers: (r.answers as number[]) || [],
+            score: Number(r.score) || 0,
+            totalMarks: Number(r.total_marks) || 0,
+            accuracy: Number(r.accuracy) || 0,
+            rank: r.rank ? Number(r.rank) : undefined,
+            submittedAt: r.submitted_at,
+            weakChapters: (r.weak_chapters as string[]) || [],
+          })) as ExamResult[]
         );
       }
     };
@@ -429,6 +480,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           examsRes,
           attendanceRes,
           feePaymentsRes,
+          studyMaterialsRes,
+          examResultsRes,
         ] = await withSyncTimeout(
           Promise.all([
             supabase.from('profiles').select('*'),
@@ -439,6 +492,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             supabase.from('exams').select('*').order('scheduled_at', { ascending: false }),
             supabase.from('attendance').select('*'),
             supabase.from('fee_payments').select('*').order('date', { ascending: false }),
+            supabase.from('study_materials').select('*').order('uploaded_at', { ascending: false }),
+            supabase.from('exam_results').select('*').order('submitted_at', { ascending: false }),
           ])
         );
 
@@ -452,7 +507,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           announcementsRes,
           examsRes,
           attendanceRes,
-          feePaymentsRes
+          feePaymentsRes,
+          studyMaterialsRes,
+          examResultsRes
         );
       } catch (err) {
         console.error('Data sync error:', err);
@@ -474,23 +531,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const p = profileList.find((prof) => prof.id === s.id) || {};
         return {
           ...s,
+          id: String(s.id),
           name: p.name || 'Unknown',
           email: p.email || '',
           phone: p.phone || '',
           role: 'student' as const,
-          studentId: s.student_id,
-          batchId: s.batch_id,
-          parentName: s.parent_name,
-          parentPhone: s.parent_phone,
+          studentId: String(s.student_id || ''),
+          batchId: String(s.batch_id || ''),
+          category: (s.category as Category) || '11th',
+          stream: (s.stream as Stream) || 'PCM',
+          parentName: s.parent_name || '',
+          parentPhone: s.parent_phone || '',
           attendancePercent: Number(s.attendance_percent) || 0,
           performanceScore: Number(s.performance_score) || 0,
-          subjects: s.subjects || [],
+          subjects: (s.subjects as SubjectName[]) || [],
           admissionDate: s.admission_date || '',
           totalFees: Number(s.total_fees) || 0,
           paidFees: Number(s.paid_fees) || 0,
           notes: s.notes || '',
           password: s.password || '',
-        };
+        } as Student;
       });
       setStudents(formatted);
     };
@@ -504,15 +564,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const p = profileList.find((prof) => prof.id === t.id) || {};
         return {
           ...t,
+          id: String(t.id),
           name: p.name || 'Unknown',
           email: p.email || '',
           phone: p.phone || '',
           role: 'teacher' as const,
-          teacherId: t.teacher_id,
+          teacherId: String(t.teacher_id || ''),
+          subject: (t.subject as SubjectName) || 'Physics',
           assignedCategories: t.assigned_categories || [],
           permissions: t.permissions || [],
           password: t.password || '',
-        };
+        } as Teacher;
       });
       setTeachers(formatted);
     };
@@ -527,6 +589,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setBatches(
             data.map((b) => ({
               ...b,
+              id: String(b.id),
               studentIds: b.student_ids || [],
               teacherIds: b.teacher_ids || [],
             })) as Batch[]
@@ -539,6 +602,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setAnnouncements(
             data.map((a) => ({
               ...a,
+              id: String(a.id),
               authorId: a.author_id,
               authorName: a.author_name,
               targetRole: a.target_role,
@@ -555,6 +619,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setExams(
             data.map((e) => ({
               ...e,
+              id: String(e.id),
+              duration: Number(e.duration) || 0,
               teacherId: e.teacher_id,
               batchId: e.batch_id,
               scheduledAt: e.scheduled_at,
@@ -570,6 +636,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setAttendance(
             data.map((at) => ({
               ...at,
+              id: String(at.id),
               batchId: at.batch_id,
               teacherId: at.teacher_id,
             })) as AttendanceRecord[]
@@ -582,9 +649,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setFeePayments(
             data.map((p) => ({
               ...p,
+              id: String(p.id),
+              amount: Number(p.amount) || 0,
               studentId: p.student_id,
               receiptNo: p.receipt_no,
             })) as FeePayment[]
+          );
+        }
+      }},
+      { name: 'study_materials', fetcher: async () => {
+        const { data } = await supabase.from('study_materials').select('*').order('uploaded_at', { ascending: false });
+        if (data && !cancelled) {
+          setStudyMaterials(
+            data.map((m) => ({
+              ...m,
+              id: String(m.id),
+              batchId: m.batch_id,
+              teacherId: m.teacher_id,
+              fileUrl: m.file_url,
+              fileName: m.file_name,
+              uploadedAt: m.uploaded_at,
+            })) as StudyMaterial[]
+          );
+        }
+      }},
+      { name: 'exam_results', fetcher: async () => {
+        const { data } = await supabase.from('exam_results').select('*').order('submitted_at', { ascending: false });
+        if (data && !cancelled) {
+          setExamResults(
+            data.map((r) => ({
+              ...r,
+              id: String(r.id),
+              examId: r.exam_id,
+              studentId: r.student_id,
+              score: Number(r.score) || 0,
+              totalMarks: Number(r.total_marks) || 0,
+              accuracy: Number(r.accuracy) || 0,
+              rank: r.rank ? Number(r.rank) : undefined,
+              submittedAt: r.submitted_at,
+              weakChapters: (r.weak_chapters as string[]) || [],
+            })) as ExamResult[]
           );
         }
       }},
