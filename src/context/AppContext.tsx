@@ -105,6 +105,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // If no user in storage, don't show loading screen, go straight to login
     return !!localStorage.getItem(STORAGE_KEYS.USER);
   });
+  const [sessionReady, setSessionReady] = useState(false);
   const syncGenerationRef = useRef(0);
   const isAuthenticatingRef = useRef(false);
   const [activeTab, setActiveTab] = useState(() => {
@@ -465,6 +466,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
 
         const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+        if (isMounted) setSessionReady(true);
 
         if (sessionError) {
           console.warn('Session check error:', sessionError.message);
@@ -557,8 +559,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Supabase Data Fetching & Real-time Subscriptions (background — never blocks the UI)
   useEffect(() => {
     const userId = currentUser?.id;
-    if (!userId) {
-      setLoading(false);
+    if (!userId || !sessionReady) {
+      if (!userId) setLoading(false);
       return;
     }
 
