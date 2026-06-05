@@ -332,6 +332,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
 
         if (!profileData) {
+          console.warn('Profile not found for authenticated user:', userId);
+          // If we have an auth session but no profile, we should sign out to prevent broken state
+          if (!isAuthenticatingRef.current) {
+            await supabase.auth.signOut();
+            setCurrentUser(null);
+            localStorage.removeItem(STORAGE_KEYS.USER);
+          }
           if (isMounted) setAuthLoading(false);
           return;
         }
@@ -365,7 +372,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const saved = localStorage.getItem(STORAGE_KEYS.USER);
       if (!saved) return null;
       try {
-        return JSON.parse(saved) as AcademySessionUser;
+        const user = JSON.parse(saved);
+        if (!user || !user.id || !user.role) return null;
+        return user as AcademySessionUser;
       } catch {
         return null;
       }
@@ -376,75 +385,67 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const cachedUser = parseCachedUser();
         const cachedRole = cachedUser?.role?.toString().toLowerCase();
 
-        // Fast path: restore admin from cache so refresh never stalls on auth
-        if (cachedRole === 'admin' && cachedUser?.id && isMounted) {
-          const adminUser = toAdminSession(cachedUser);
-          setCurrentUser(adminUser);
-          setAuthLoading(false); // Immediate unlock for cached admins
-        }
-
+        // 1. Check Supabase session first (Single Source of Truth)
         const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-        if (isMounted) setSessionReady(true);
-
+        
         if (sessionError) {
           console.warn('Session check error:', sessionError.message);
         }
 
         if (session?.user) {
+          // Valid Supabase session exists -> Sync profile and unlock
           await syncProfile(session.user.id, session.user.email);
-          if (isMounted) setAuthLoading(false);
+          if (isMounted) {
+            setSessionReady(true);
+            setAuthLoading(false);
+          }
           return;
         }
 
-        // If we reach here, there's no active Supabase session
+        // 2. If no Supabase session, check if we have a valid Academy Login (Students/Teachers)
+        // or a cached Admin that needs verification.
         if (cachedUser?.id && !isAuthenticatingRef.current) {
-          // If we have a cached admin, keep it but try to verify background
-          if (cachedRole === 'admin' && isMounted) {
-            // Background verification, don't block
-            lookupProfileById(cachedUser.id).then(verifyAdmin => {
-              if (isMounted && verifyAdmin?.role?.toLowerCase() === 'admin') {
-                const adminUser = toAdminSession(verifyAdmin);
-                setCurrentUser(adminUser);
-                localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(adminUser));
-              }
-            }).catch(() => {});
-            
-            if (isMounted) setAuthLoading(false);
-            return;
-          }
-
-          if ((cachedRole === 'student' || cachedRole === 'teacher') && isMounted) {
-            // Restore from cache but don't block auth screen
-            restoreAcademyUserById(cachedUser.id, cachedRole as 'student' | 'teacher')
-              .then(restored => {
-                if (isMounted && restored) {
-                  setCurrentUser(restored);
-                  localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(restored));
-                }
-              }).catch(() => {});
-            
-            if (isMounted) setAuthLoading(false);
-            return;
+          if (cachedRole === 'admin') {
+            // Admin recovery: Verify against profiles table
+            const verifyAdmin = await lookupProfileById(cachedUser.id);
+            if (isMounted && verifyAdmin?.role?.toLowerCase() === 'admin') {
+              const adminUser = toAdminSession(verifyAdmin);
+              setCurrentUser(adminUser);
+              localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(adminUser));
+              setSessionReady(true);
+              setAuthLoading(false);
+              return;
+            }
+          } else if (cachedRole === 'student' || cachedRole === 'teacher') {
+            // Academy user recovery: Try to restore session
+            const restored = await restoreAcademyUserById(cachedUser.id, cachedRole as 'student' | 'teacher');
+            if (isMounted && restored) {
+              setCurrentUser(restored);
+              localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(restored));
+              setSessionReady(true);
+              setAuthLoading(false);
+              return;
+            }
           }
         }
 
-        // Final fallback: clear loading and user if no session found
+        // 3. Final fallback: No valid session found anywhere
         if (isMounted) {
           if (!isAuthenticatingRef.current) {
             setCurrentUser(null);
             localStorage.removeItem(STORAGE_KEYS.USER);
           }
+          setSessionReady(true); // Allow UI to render (login screen)
           setAuthLoading(false);
         }
       } catch (err) {
         console.error('Auth init error:', err);
-        const cached = parseCachedUser();
-        if (isMounted && cached?.role?.toString().toLowerCase() !== 'admin') {
+        if (isMounted) {
           setCurrentUser(null);
           localStorage.removeItem(STORAGE_KEYS.USER);
+          setAuthLoading(false);
+          setSessionReady(true);
         }
-      } finally {
-        if (isMounted) setAuthLoading(false);
       }
     };
 
@@ -535,29 +536,79 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // 3. Success Path A: Supabase Auth Succeeded
       if (!authError && authData.user) {
         isAuthenticatingRef.current = false;
-        setAuthLoading(false); // Unlock UI immediately
-
+        
         // Get profile as fast as possible
         let resolvedProfile = await Promise.race([
           profilePromise,
           lookupProfileById(authData.user.id)
-        ]);
+        ]).catch(() => null);
 
         if (!resolvedProfile) {
-          resolvedProfile = await lookupProfileById(authData.user.id);
+          resolvedProfile = await lookupProfileById(authData.user.id).catch(() => null);
         }
 
         if (resolvedProfile) {
           const role = resolvedProfile.role?.toLowerCase() || 'student';
+          
+          // Enrich profile with student/teacher data if needed
+          let fullProfile: any = { ...resolvedProfile };
+          if (role === 'student') {
+            const { data: student } = await supabase.from('students').select('*').eq('id', authData.user.id).maybeSingle();
+            if (student) fullProfile = { ...fullProfile, ...student };
+          } else if (role === 'teacher') {
+            const { data: teacher } = await supabase.from('teachers').select('*').eq('id', authData.user.id).maybeSingle();
+            if (teacher) fullProfile = { ...fullProfile, ...teacher };
+          }
+
           const sessionUser = role === 'admin' 
-            ? toAdminSession(resolvedProfile) 
-            : { ...resolvedProfile, role } as any;
+            ? toAdminSession(fullProfile) 
+            : { ...fullProfile, role } as any;
 
           setCurrentUser(sessionUser);
           localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(sessionUser));
           setSessionReady(true); 
+          setAuthLoading(false);
           setActiveTab('dashboard');
           return { ok: true, user: sessionUser };
+        } else {
+          // If auth succeeded but no profile found, we must sync one or fail gracefully
+          console.warn('Auth succeeded but profile missing for user:', authData.user.id);
+          // Try one last sync attempt
+          // Define inline sync logic since syncProfile is only available in the auth init useEffect scope
+          const userId = authData.user.id;
+          const sessionEmail = authData.user.email;
+          try {
+            let profileData = await lookupProfileById(userId);
+            if (!profileData && sessionEmail) {
+              profileData = await lookupProfileForLogin(sessionEmail);
+            }
+
+            if (profileData) {
+              let profile: Record<string, unknown> = { ...profileData };
+              const role = String(profile.role ?? '').toLowerCase();
+              profile.role = role;
+
+              if (role === 'student') {
+                const { data: student } = await supabase.from('students').select('*').eq('id', userId).maybeSingle();
+                if (student) profile = { ...profile, ...student };
+              } else if (role === 'teacher') {
+                const { data: teacher } = await supabase.from('teachers').select('*').eq('id', userId).maybeSingle();
+                if (teacher) profile = { ...profile, ...teacher };
+              }
+
+              const sessionUser = role === 'admin' ? toAdminSession(profile) : { ...profile, role };
+              setCurrentUser(sessionUser);
+              localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(sessionUser));
+              setSessionReady(true);
+            }
+          } catch (err) {
+            console.error('Profile sync error:', err);
+          } finally {
+            setAuthLoading(false);
+          }
+          if (currentUser) {
+            return { ok: true, user: currentUser };
+          }
         }
       }
 
@@ -602,18 +653,53 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, []);
 
-  const logout = useCallback(() => {
-    setCurrentUser(null);
-    setActiveTab('dashboard');
-    localStorage.removeItem(STORAGE_KEYS.USER);
-    localStorage.removeItem(STORAGE_KEYS.ACTIVE_TAB);
-    supabase.auth.signOut(); // Sign out from Supabase
-    // Add clear storage option for developers or full reset
-    const clearAllData = () => {
-      Object.values(STORAGE_KEYS).forEach(key => localStorage.removeItem(key));
+  const logout = useCallback(async () => {
+    try {
+      setAuthLoading(true);
+      setCurrentUser(null);
+      setActiveTab('dashboard');
+      
+      // Clear all related storage
+      const keysToClear = [
+        STORAGE_KEYS.USER,
+        STORAGE_KEYS.ACTIVE_TAB,
+        'supabase.auth.token', // Clear internal Supabase tokens just in case
+      ];
+      keysToClear.forEach(key => localStorage.removeItem(key));
+      
+      // Attempt clean Supabase sign out
+      await supabase.auth.signOut();
+      
+      // Optional: Clear service worker cache if needed
+      if ('caches' in window) {
+        const cacheNames = await caches.keys();
+        await Promise.all(
+          cacheNames
+            .filter(name => name.includes('supabase'))
+            .map(name => caches.delete(name))
+        );
+      }
+    } catch (err) {
+      console.error('Logout error:', err);
+    } finally {
+      setAuthLoading(false);
+      // Hard refresh to ensure all states are reset
+      window.location.href = '/';
+    }
+  }, []);
+
+  // Expose a global helper for emergency reset
+  useEffect(() => {
+    (window as any).clearAcademyData = () => {
+      localStorage.clear();
+      sessionStorage.clear();
+      if ('caches' in window) {
+        caches.keys().then(names => {
+          names.forEach(name => caches.delete(name));
+        });
+      }
       window.location.reload();
     };
-    (window as any).clearAcademyData = clearAllData;
   }, []);
 
   return (
