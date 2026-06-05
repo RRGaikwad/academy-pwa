@@ -388,38 +388,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const syncProfile = async (userId: string, sessionEmail?: string) => {
       try {
-        // 1. Try to get profile (RPC bypasses RLS)
-        // Run lookups in parallel to speed up role resolution
-        const [profileById, studentRes, teacherRes] = await Promise.all([
-          lookupProfileById(userId),
-          supabase.from('students').select('*').eq('id', userId).maybeSingle(),
-          supabase.from('teachers').select('*').eq('id', userId).maybeSingle()
-        ]);
-
-        let profile: Record<string, unknown> = profileById
-          ? { ...profileById }
-          : { id: userId };
-
-        // 1b. Supabase Auth UUID may differ from profiles.id — resolve by email
-        if (!profile.role && sessionEmail) {
-          const byEmail = await lookupProfileForLogin(sessionEmail);
-          if (byEmail) {
-            profile = { ...byEmail };
-          }
-        }
-
-        // 2. If no role in profile, check results from parallel queries
-        if (!profile.role && studentRes.data) {
-          profile = { ...profile, ...studentRes.data, role: 'student' };
-        }
-
-        // 3. Still no role? check teachers table
-        if (!profile.role && teacherRes.data) {
-          profile = { ...profile, ...teacherRes.data, role: 'teacher' };
-        }
+        // 1. Get core profile first (RPC bypasses RLS and is fastest)
+        let profileData = await lookupProfileById(userId);
         
+        // 1b. If not found by ID, try email (Supabase Auth UUID mismatch fallback)
+        if (!profileData && sessionEmail) {
+          profileData = await lookupProfileForLogin(sessionEmail);
+        }
+
+        if (!profileData) {
+          console.warn('No profile found for authenticated user');
+          if (isMounted) setAuthLoading(false);
+          return;
+        }
+
+        let profile: Record<string, unknown> = { ...profileData };
         const role = String(profile.role ?? '').toLowerCase();
         profile.role = role;
+
+        // 2. Fetch role-specific data only when needed
+        if (role === 'student') {
+          const { data: student } = await supabase.from('students').select('*').eq('id', userId).maybeSingle();
+          if (student) profile = { ...profile, ...student };
+        } else if (role === 'teacher') {
+          const { data: teacher } = await supabase.from('teachers').select('*').eq('id', userId).maybeSingle();
+          if (teacher) profile = { ...profile, ...teacher };
+        }
 
         // Only update current user if we're not in the middle of a manual login
         if (isMounted && role) {
@@ -619,17 +613,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       // 3. Success Path A: Supabase Auth Succeeded
       if (!authError && authData.user) {
-        // Force immediate unlock
-        setAuthLoading(false);
         isAuthenticatingRef.current = false;
 
-        // Try to get profile from parallel promise or ID lookup
+        // Fast-track profile resolution: Race the email lookup against an ID lookup
+        // No artificial timeouts - we use whichever finishes first.
         let resolvedProfile = await Promise.race([
           profilePromise,
-          new Promise<null>((resolve) => setTimeout(() => resolve(null), 1000))
+          lookupProfileById(authData.user.id)
         ]);
 
         if (!resolvedProfile) {
+          // Fallback if the race somehow failed to produce a result
           resolvedProfile = await lookupProfileById(authData.user.id);
         }
 

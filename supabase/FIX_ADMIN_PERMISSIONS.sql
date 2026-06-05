@@ -4,8 +4,10 @@
 -- This script fixes the "0 records" issue by breaking RLS recursion on the profiles table.
 -- =============================================================================
 
--- 1. Ensure password column exists
+-- 1. Ensure password column and optimized indexes exist
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS password text;
+CREATE INDEX IF NOT EXISTS idx_profiles_email_lower_trim ON public.profiles (lower(trim(email)));
+CREATE INDEX IF NOT EXISTS idx_profiles_role ON public.profiles (role);
 
 -- 2. CREATE A SECURITY DEFINER ROLE GETTER
 -- This is the key to breaking RLS recursion. 
