@@ -1,30 +1,28 @@
 -- =============================================================================
--- ULTIMATE ADMIN AUTH & PERMISSIONS FIX (v5.0 - THE FINAL PERMANENT FIX)
+-- ULTIMATE ADMIN AUTH & PERMISSIONS FIX (v6.0 - THE FINAL RECURSION FIX)
 -- RUN THIS IN SUPABASE → SQL Editor → Run
--- This script eliminates RLS recursion and ensures persistent admin access.
+-- This script fixes the "0 records" issue by breaking RLS recursion on the profiles table.
 -- =============================================================================
 
 -- 1. Ensure password column exists
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS password text;
 
--- 2. CREATE A ROBUST ADMIN CHECKER (Bypasses RLS)
--- This function is SECURITY DEFINER, meaning it runs as the database owner.
--- It will ALWAYS be able to read the profiles table even if RLS is enabled.
-CREATE OR REPLACE FUNCTION public.is_admin_v5(p_uid uuid)
-RETURNS boolean
+-- 2. CREATE A SECURITY DEFINER ROLE GETTER
+-- This is the key to breaking RLS recursion. 
+-- SECURITY DEFINER means this function runs with database owner privileges,
+-- bypassing RLS when it reads the profiles table.
+CREATE OR REPLACE FUNCTION public.get_auth_role()
+RETURNS text
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public
 AS $$
 BEGIN
-  RETURN EXISTS (
-    SELECT 1 FROM public.profiles
-    WHERE id = p_uid AND lower(role::text) = 'admin'
-  );
+  RETURN (SELECT role::text FROM public.profiles WHERE id = auth.uid());
 END;
 $$;
 
--- 3. Fix Profile Lookup RPC
+-- 3. Fix Profile Lookup RPC (For Login)
 CREATE OR REPLACE FUNCTION public.lookup_profile_for_login(p_email text)
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -54,7 +52,7 @@ BEGIN
 END;
 $$;
 
--- 4. CLEANUP AND APPLY BULLETPROOF POLICIES
+-- 4. APPLY BULLETPROOF POLICIES (Recursion-Free)
 DO $$
 DECLARE
     t text;
@@ -80,48 +78,43 @@ BEGIN
             END $policy_cleanup$;
         ', t, t);
         
-        -- The Core Admin Policy: Uses the SECURITY DEFINER function to avoid recursion
+        -- The Core Admin Policy: Uses the get_auth_role() function to avoid recursion
         EXECUTE format('
-            CREATE POLICY "Admin Full Access" ON public.%I
+            CREATE POLICY "Admin Full Access v6" ON public.%I
             FOR ALL TO authenticated
-            USING (public.is_admin_v5(auth.uid()))
-            WITH CHECK (public.is_admin_v5(auth.uid()))
+            USING (public.get_auth_role() = ''admin'')
+            WITH CHECK (public.get_auth_role() = ''admin'')
         ', t);
 
-        -- Self-Access Policies for non-admins
+        -- Self-Access Policies for non-admins (so they can see their own data)
         IF t = 'profiles' THEN
-            EXECUTE format('CREATE POLICY "User View Own Profile" ON public.%I FOR SELECT TO authenticated USING (auth.uid() = id)', t);
+            EXECUTE format('CREATE POLICY "User View Own Profile v6" ON public.%I FOR SELECT TO authenticated USING (auth.uid() = id)', t);
         ELSIF t = 'students' THEN
-            EXECUTE format('CREATE POLICY "Student View Own Record" ON public.%I FOR SELECT TO authenticated USING (auth.uid() = id)', t);
+            EXECUTE format('CREATE POLICY "Student View Own Record v6" ON public.%I FOR SELECT TO authenticated USING (auth.uid() = id)', t);
         ELSIF t = 'teachers' THEN
-            EXECUTE format('CREATE POLICY "Teacher View Own Record" ON public.%I FOR SELECT TO authenticated USING (auth.uid() = id)', t);
+            EXECUTE format('CREATE POLICY "Teacher View Own Record v6" ON public.%I FOR SELECT TO authenticated USING (auth.uid() = id)', t);
         END IF;
     END LOOP;
 END $$;
 
--- 5. Public Read for Skeleton Data (Authenticated Only)
--- This ensures the app doesn't look "broken" during the split-second before role verification
-CREATE POLICY "Public Authenticated View Announcements" ON public.announcements FOR SELECT TO authenticated USING (true);
-CREATE POLICY "Public Authenticated View Batches" ON public.batches FOR SELECT TO authenticated USING (true);
+-- 5. Public Read for Essential Skeleton Data (Authenticated Only)
+-- This ensures the UI doesn't look empty while the role is being verified.
+CREATE POLICY "Public View Announcements v6" ON public.announcements FOR SELECT TO authenticated USING (true);
+CREATE POLICY "Public View Batches v6" ON public.batches FOR SELECT TO authenticated USING (true);
 
--- 6. Ensure Existing Admins are Correctly Set
+-- 6. Ensure Master Admin is correctly set in profiles
+-- This matches the user in your screenshot
 INSERT INTO public.profiles (id, email, role, name)
 SELECT 
     id, 
     email, 
     'admin',
-    COALESCE(raw_user_meta_data->>'full_name', raw_user_meta_data->>'name', 'Admin')
+    COALESCE(raw_user_meta_data->>'full_name', raw_user_meta_data->>'name', 'Master Admin')
 FROM auth.users
-ON CONFLICT (id) DO UPDATE SET role = 'admin';
+WHERE email = 'admin@rohan.com'
+ON CONFLICT (id) DO UPDATE SET role = 'admin', name = 'Master Admin';
 
 -- 7. Fix Realtime Replication
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime') THEN
-        CREATE PUBLICATION supabase_realtime;
-    END IF;
-END $$;
-
 DO $$
 DECLARE
     t text;
@@ -131,8 +124,11 @@ DECLARE
         'fee_payments', 'study_materials', 'exam_results'
     ];
 BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime') THEN
+        CREATE PUBLICATION supabase_realtime;
+    END IF;
+
     FOREACH t IN ARRAY tables LOOP
-        -- REPLICA IDENTITY FULL is required for Realtime to send old/new data correctly
         EXECUTE format('ALTER TABLE public.%I REPLICA IDENTITY FULL', t);
         BEGIN
             EXECUTE format('ALTER PUBLICATION supabase_realtime ADD TABLE public.%I', t);
@@ -141,5 +137,5 @@ BEGIN
 END $$;
 
 -- 8. Final Permissions
-GRANT EXECUTE ON FUNCTION public.is_admin_v5(uuid) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.get_auth_role() TO authenticated;
 GRANT EXECUTE ON FUNCTION public.lookup_profile_for_login(text) TO anon, authenticated;
