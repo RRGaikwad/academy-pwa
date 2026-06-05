@@ -114,13 +114,18 @@ export const Login: React.FC = () => {
             </button>
           </form>
 
-          {/* Demo Login Shortcuts */}
+          {/* Enhanced Admin/Access Info */}
           <div className="mt-6 pt-6 border-t border-white/10">
-            <p className="text-blue-300 text-xs font-medium uppercase tracking-wider mb-3">Institutional Access</p>
-            <div className="grid grid-cols-1 gap-2 text-center p-3 rounded-xl bg-white/5 border border-white/10">
-               <p className="text-white/60 text-[10px] leading-relaxed">
-                 Use your assigned unique credentials to access your dashboard. 
-                 Master Admin control is restricted to authorized personnel.
+            <div className="flex items-center gap-2 mb-3">
+              <div className="w-1 h-4 bg-orange-500 rounded-full" />
+              <p className="text-blue-300 text-xs font-semibold uppercase tracking-widest">Secure Access Control</p>
+            </div>
+            <div className="p-3.5 rounded-xl bg-blue-500/5 border border-white/5 space-y-2">
+               <p className="text-white/70 text-[11px] leading-relaxed">
+                 <span className="text-orange-400 font-bold">Admins:</span> Use your registered institutional email. Role-based access is strictly enforced via database security policies.
+               </p>
+               <p className="text-white/50 text-[10px] leading-relaxed italic">
+                 Unauthorized access attempts are logged for security purposes.
                </p>
             </div>
           </div>

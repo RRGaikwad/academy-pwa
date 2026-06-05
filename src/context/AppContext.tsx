@@ -65,13 +65,19 @@ const AppContext = createContext<AppContextType | null>(null);
 
 const SYNC_TIMEOUT_MS = 12_000;
 
-const toAdminSession = (user: AcademySessionUser | Record<string, unknown>): AcademySessionUser => ({
-  id: String(user.id),
-  name: String(user.name || 'Admin'),
-  email: String(user.email || ''),
-  phone: String(user.phone ?? ''),
-  role: 'admin',
-});
+const toAdminSession = (user: AcademySessionUser | Record<string, unknown>): AcademySessionUser => {
+  const userId = String(user.id || '');
+  if (!userId) {
+    console.warn('toAdminSession called without user id');
+  }
+  return {
+    id: userId,
+    name: String(user.name || 'Admin'),
+    email: String(user.email || ''),
+    phone: String(user.phone ?? ''),
+    role: 'admin',
+  };
+};
 
 const withSyncTimeout = <T,>(promise: Promise<T>): Promise<T> =>
   Promise.race([

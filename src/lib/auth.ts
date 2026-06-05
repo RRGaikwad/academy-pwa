@@ -422,6 +422,11 @@ export async function authenticateAdminUser(
   email: string,
   password: string
 ): Promise<LoginResult> {
+  // 0. Verify Role (Robustness check)
+  if (profile.role?.toLowerCase() !== 'admin') {
+    return { ok: false, reason: 'Access denied. Administrative privileges required.' };
+  }
+
   const cleanEmail = normalizeEmail(email);
   const cleanPassword = normalizePassword(password);
 
