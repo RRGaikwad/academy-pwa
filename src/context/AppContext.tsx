@@ -545,16 +545,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // password auth — making login feel "stuck". scope:'local' is instant.
       try { await supabase.auth.signOut({ scope: 'local' }); } catch { /* best-effort */ }
 
-      // 1. Start Auth and Profile resolution in parallel
-      const authPromise = supabase.auth.signInWithPassword({ email: cleanEmail, password: cleanPassword })
-        .catch(err => ({ data: { user: null, session: null }, error: err }));
+      // 1. Start Auth and Profile resolution in parallel with a 10-second timeout
+      // This prevents the "Signing in..." button from spinning forever if the Supabase URL
+      // is incorrectly configured in Vercel but passes the basic format check.
+      const TIMEOUT_MS = 10000;
+      const timeoutReject = (msg: string) => new Promise<never>((_, reject) => 
+        setTimeout(() => reject(new Error(msg)), TIMEOUT_MS)
+      );
+
+      const authPromise = Promise.race([
+        supabase.auth.signInWithPassword({ email: cleanEmail, password: cleanPassword }),
+        timeoutReject('Connection timed out. Please verify your VITE_SUPABASE_URL in Vercel is your REAL project URL, not a placeholder.')
+      ]).catch(err => ({ data: { user: null, session: null }, error: err }));
       
-      // Profile resolution can be slower, so we'll wrap it in a small timeout for the "instant" path
-      const profilePromise = resolveProfileForLogin(cleanEmail).catch(() => null);
+      const profilePromise = Promise.race([
+        resolveProfileForLogin(cleanEmail),
+        timeoutReject('Profile fetch timeout')
+      ]).catch(() => null);
 
       // 2. Wait for Supabase Auth response (usually the most definitive and fastest)
       const authResponse = await authPromise;
-      const { data: authData, error: authError } = authResponse;
+      const { data: authData, error: authError } = authResponse as { data: any; error: any };
 
       // 3. Success Path A: Supabase Auth Succeeded
       if (!authError && authData.user) {
