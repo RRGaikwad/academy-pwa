@@ -49,6 +49,16 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
         clientsClaim: true,
         skipWaiting: true,
+        // Never let the service worker cache or intercept Supabase API requests.
+        // Caching auth tokens or data responses would cause stale data and login failures.
+        runtimeCaching: [
+          {
+            urlPattern: /^https:\/\/.*\.supabase\.co\/.*/i,
+            handler: 'NetworkOnly',
+          },
+        ],
+        navigateFallback: 'index.html',
+        navigateFallbackDenylist: [/^\/rest\//, /^\/auth\//, /^\/storage\//],
       }
     })
   ],
