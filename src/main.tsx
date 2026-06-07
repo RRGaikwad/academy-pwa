@@ -4,17 +4,10 @@ import { AppProvider } from './context/AppContext.tsx';
 import "./index.css";
 import App from "./App";
 
-// Forcefully unregister any stuck/stale Service Workers from previous PWA versions
-// that might be intercepting and hanging Supabase Auth requests.
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.getRegistrations().then((registrations) => {
-    for (const registration of registrations) {
-      registration.unregister().then(
-        (boolean) => console.log('Successfully unregistered stale service worker:', boolean)
-      ).catch(
-        (error) => console.error('Error unregistering stale service worker:', error)
-      );
-    }
+// Stale dev service workers can cause a blank screen on localhost
+if (import.meta.env.DEV && "serviceWorker" in navigator) {
+  void navigator.serviceWorker.getRegistrations().then((registrations) => {
+    registrations.forEach((registration) => void registration.unregister());
   });
 }
 
