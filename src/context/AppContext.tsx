@@ -533,11 +533,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return { ok: false, reason: 'Supabase is not configured correctly. Please contact support.' };
       }
 
-      // Clear any stale local auth state before sign-in. Without this,
-      // old/expired session tokens cause signInWithPassword to first try a
-      // token refresh (a slow network round-trip) before falling through to
-      // password auth — making login feel "stuck". scope:'local' is instant.
-      try { supabase.auth.signOut({ scope: 'local' }); } catch { /* best-effort */ }
+      // We DO NOT call signOut here before logging in.
+      // Calling signOut asynchronously caused a race condition where it would sometimes delete 
+      // the NEW session from localStorage after signInWithPassword had already succeeded, 
+      // which caused data to disappear on refresh. Supabase naturally overwrites old sessions.
 
       // 1. Start Auth and Profile resolution in parallel with a 10-second timeout
       // This prevents the "Signing in..." button from spinning forever if the Supabase URL
