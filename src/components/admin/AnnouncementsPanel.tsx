@@ -4,8 +4,9 @@ import { Announcement } from '../../types';
 import { Badge } from '../shared/Badge';
 import { Modal } from '../shared/Modal';
 import { PageHeader } from '../shared/PageHeader';
-import { Plus, Megaphone, Trash2, Bell } from 'lucide-react';
+import { Plus, Megaphone, Trash2, Bell, Loader2 } from 'lucide-react';
 import { format } from 'date-fns';
+import { supabase } from '../../lib/supabase';
 
 const typeConfig: Record<string, { color: 'red' | 'blue' | 'orange' | 'green' | 'gray' | 'purple'; emoji: string }> = {
   exam: { color: 'red', emoji: '🚨' },
@@ -19,30 +20,68 @@ const typeConfig: Record<string, { color: 'red' | 'blue' | 'orange' | 'green' | 
 export const AnnouncementsPanel: React.FC = () => {
   const { announcements, setAnnouncements, currentUser, batches } = useApp();
   const [showModal, setShowModal] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [form, setForm] = useState<Partial<Announcement>>({
     title: '', content: '', type: 'general', targetRole: 'all', targetBatch: ''
   });
 
-  const handleCreate = () => {
-    if (!form.title || !form.content) return;
-    const newAnn: Announcement = {
-      id: `a${Date.now()}`,
-      title: form.title!,
-      content: form.content!,
-      authorId: currentUser!.id,
-      authorName: currentUser!.name,
-      targetRole: form.targetRole as any || 'all',
-      targetBatch: form.targetBatch,
-      createdAt: new Date().toISOString(),
-      type: form.type as any || 'general',
-    };
-    setAnnouncements(prev => [newAnn, ...prev]);
-    setShowModal(false);
-    setForm({ title: '', content: '', type: 'general', targetRole: 'all', targetBatch: '' });
+  const handleCreate = async () => {
+    if (!form.title || !form.content || isSaving) return;
+    setIsSaving(true);
+    try {
+      const { data, error } = await supabase
+        .from('announcements')
+        .insert({
+          title: form.title,
+          content: form.content,
+          author_id: currentUser!.id,
+          author_name: currentUser!.name,
+          target_role: form.targetRole || 'all',
+          target_batch: form.targetBatch || null,
+          type: form.type || 'general',
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      const newAnn: Announcement = {
+        id: String(data.id),
+        title: data.title,
+        content: data.content,
+        authorId: data.author_id,
+        authorName: data.author_name,
+        targetRole: data.target_role ?? 'all',
+        targetBatch: data.target_batch ?? undefined,
+        createdAt: data.created_at,
+        type: data.type,
+      };
+
+      setAnnouncements(prev => [newAnn, ...prev]);
+      setShowModal(false);
+      setForm({ title: '', content: '', type: 'general', targetRole: 'all', targetBatch: '' });
+    } catch (err: any) {
+      console.error('Failed to create announcement:', err);
+      alert(`Failed to publish announcement: ${err?.message ?? 'Unknown error'}`);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
-  const handleDelete = (id: string) => {
-    if (confirm('Delete this announcement?')) setAnnouncements(prev => prev.filter(a => a.id !== id));
+  const handleDelete = async (id: string) => {
+    if (!confirm('Delete this announcement?')) return;
+    setDeletingId(id);
+    try {
+      const { error } = await supabase.from('announcements').delete().eq('id', id);
+      if (error) throw error;
+      setAnnouncements(prev => prev.filter(a => a.id !== id));
+    } catch (err: any) {
+      console.error('Failed to delete announcement:', err);
+      alert(`Failed to delete announcement: ${err?.message ?? 'Unknown error'}`);
+    } finally {
+      setDeletingId(null);
+    }
   };
 
   const sorted = [...announcements].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
@@ -100,9 +139,14 @@ export const AnnouncementsPanel: React.FC = () => {
                     </div>
                   </div>
                 </div>
-                <button onClick={() => handleDelete(ann.id)}
-                  className="p-1.5 text-red-400 bg-red-50 rounded-lg hover:bg-red-100 ml-2 flex-shrink-0">
-                  <Trash2 size={13} />
+                <button
+                  onClick={() => handleDelete(ann.id)}
+                  disabled={deletingId === ann.id}
+                  className="p-1.5 text-red-400 bg-red-50 rounded-lg hover:bg-red-100 ml-2 flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {deletingId === ann.id
+                    ? <Loader2 size={13} className="animate-spin" />
+                    : <Trash2 size={13} />}
                 </button>
               </div>
               <p className="text-sm text-slate-600 leading-relaxed">{ann.content}</p>
@@ -174,9 +218,12 @@ export const AnnouncementsPanel: React.FC = () => {
           <div className="flex gap-3">
             <button onClick={() => setShowModal(false)}
               className="flex-1 border border-slate-200 text-slate-600 py-2.5 rounded-xl text-sm font-semibold">Cancel</button>
-            <button onClick={handleCreate}
-              className="flex-1 bg-orange-500 hover:bg-orange-600 text-white py-2.5 rounded-xl text-sm font-semibold">
-              Publish
+            <button
+              onClick={handleCreate}
+              disabled={isSaving}
+              className="flex-1 bg-orange-500 hover:bg-orange-600 text-white py-2.5 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {isSaving ? <><Loader2 size={15} className="animate-spin" /> Publishing...</> : 'Publish'}
             </button>
           </div>
         </div>

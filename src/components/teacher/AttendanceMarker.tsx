@@ -3,8 +3,9 @@ import { useApp } from '../../context/AppContext';
 import { AttendanceRecord } from '../../types';
 import { Badge } from '../shared/Badge';
 import { PageHeader } from '../shared/PageHeader';
-import { CheckCircle2, XCircle, Save, Users, ChevronDown, Calendar } from 'lucide-react';
+import { CheckCircle2, XCircle, Save, Users, ChevronDown, Calendar, Loader2 } from 'lucide-react';
 import { format } from 'date-fns';
+import { supabase } from '../../lib/supabase';
 
 export const AttendanceMarker: React.FC = () => {
   const { currentUser, batches, students, attendance, setAttendance } = useApp();
@@ -18,6 +19,7 @@ export const AttendanceMarker: React.FC = () => {
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [presentMap, setPresentMap] = useState<Record<string, boolean>>({});
   const [saved, setSaved] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   const batch = batches.find(b => b.id === selectedBatch);
   const batchStudents = React.useMemo(() => {
@@ -71,23 +73,67 @@ export const AttendanceMarker: React.FC = () => {
     setSaved(false);
   };
 
-  const handleSave = () => {
-    const records = batchStudents.map(s => ({ studentId: s.id, present: presentMap[s.id] ?? true }));
-    const newRecord: AttendanceRecord = {
-      id: existingRecord?.id || `att${Date.now()}`,
-      batchId: selectedBatch,
-      date: selectedDate,
-      subject: teacher.subject,
-      teacherId: teacher.id,
-      records,
-    };
+  const handleSave = async () => {
+    if (batchStudents.length === 0 || isSaving) return;
+    setIsSaving(true);
+    setSaved(false);
 
-    if (existingRecord) {
-      setAttendance(prev => prev.map(a => a.id === existingRecord.id ? newRecord : a));
-    } else {
-      setAttendance(prev => [...prev, newRecord]);
+    const records = batchStudents.map(s => ({ studentId: s.id, present: presentMap[s.id] ?? true }));
+
+    try {
+      if (existingRecord) {
+        // Update existing attendance record
+        const { error } = await supabase
+          .from('attendance')
+          .update({
+            records,
+            subject: teacher.subject,
+          })
+          .eq('id', existingRecord.id);
+
+        if (error) throw error;
+
+        const updated: AttendanceRecord = {
+          ...existingRecord,
+          records,
+          subject: teacher.subject,
+        };
+        setAttendance(prev => prev.map(a => a.id === existingRecord.id ? updated : a));
+      } else {
+        // Insert new attendance record
+        const { data, error } = await supabase
+          .from('attendance')
+          .insert({
+            batch_id: selectedBatch,
+            date: selectedDate,
+            subject: teacher.subject,
+            teacher_id: teacher.id,
+            records,
+          })
+          .select()
+          .single();
+
+        if (error) throw error;
+
+        const newRecord: AttendanceRecord = {
+          id: String(data.id),
+          batchId: selectedBatch,
+          date: selectedDate,
+          subject: teacher.subject,
+          teacherId: teacher.id,
+          records,
+        };
+        setAttendance(prev => [...prev, newRecord]);
+      }
+
+      setSaved(true);
+    } catch (err: any) {
+      console.error('Failed to save attendance:', err);
+      alert(`Failed to save attendance: ${err?.message ?? 'Unknown error'}`);
+      setSaved(false);
+    } finally {
+      setIsSaving(false);
     }
-    setSaved(true);
   };
 
   const presentCount = Object.values(presentMap).filter(Boolean).length;
@@ -104,8 +150,8 @@ export const AttendanceMarker: React.FC = () => {
         title="Attendance Tracker"
         subtitle={`Record daily presence for ${teacher.subject} classes`}
         action={{
-          label: saved ? 'Saved ✅' : 'Save Changes',
-          icon: <Save size={18} />,
+          label: isSaving ? 'Saving...' : saved ? 'Saved ✅' : 'Save Changes',
+          icon: isSaving ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />,
           onClick: handleSave,
           color: saved ? 'green' : 'blue'
         }}
@@ -204,11 +250,17 @@ export const AttendanceMarker: React.FC = () => {
       {/* Save Button */}
       {batchStudents.length > 0 && (
         <button onClick={handleSave}
-          className={`w-full py-3.5 rounded-2xl text-sm font-bold flex items-center justify-center gap-2 transition-all ${saved
+          disabled={isSaving}
+          className={`w-full py-3.5 rounded-2xl text-sm font-bold flex items-center justify-center gap-2 transition-all disabled:opacity-60 disabled:cursor-not-allowed ${
+            saved
               ? 'bg-green-100 text-green-700 border-2 border-green-200'
               : 'bg-purple-600 hover:bg-purple-700 text-white shadow-lg shadow-purple-200'
-            }`}>
-          {saved ? <><CheckCircle2 size={18} /> Attendance Saved!</> : <><Save size={18} /> Save Attendance</>}
+          }`}>
+          {isSaving
+            ? <><Loader2 size={18} className="animate-spin" /> Saving...</>
+            : saved
+            ? <><CheckCircle2 size={18} /> Attendance Saved!</>
+            : <><Save size={18} /> Save Attendance</>}
         </button>
       )}
 

@@ -597,17 +597,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               }
 
               const sessionUser = role === 'admin' ? toAdminSession(profile) : { ...profile, role };
-              setCurrentUser(sessionUser);
+              setCurrentUser(sessionUser as any);
               localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(sessionUser));
               setSessionReady(true);
+              // Return here using sessionUser directly — currentUser state won't
+              // reflect the update synchronously due to React's async batching.
+              return { ok: true, user: sessionUser as AcademySessionUser };
             }
           } catch (err) {
             console.error('Profile sync error:', err);
           } finally {
             setAuthLoading(false);
-          }
-          if (currentUser) {
-            return { ok: true, user: currentUser };
           }
         }
       }
