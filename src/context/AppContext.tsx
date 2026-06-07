@@ -332,13 +332,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
 
         if (!profileData) {
-          console.warn('Profile not found for authenticated user:', userId);
-          // If we have an auth session but no profile, we should sign out to prevent broken state
-          if (!isAuthenticatingRef.current) {
-            await supabase.auth.signOut();
-            setCurrentUser(null);
-            localStorage.removeItem(STORAGE_KEYS.USER);
-          }
+          console.warn('Profile fetch failed or user missing. Keeping local session active:', userId);
           if (isMounted) setAuthLoading(false);
           return;
         }
