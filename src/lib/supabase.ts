@@ -8,7 +8,16 @@ const PLACEHOLDER_MARKERS = ['your_supabase', 'xxxxxxxx'];
 export const isSupabaseConfigured = (): boolean => {
   if (!supabaseUrl || !supabaseAnonKey) return false;
   const combined = `${supabaseUrl} ${supabaseAnonKey}`.toLowerCase();
-  return !PLACEHOLDER_MARKERS.some((marker) => combined.includes(marker));
+  if (PLACEHOLDER_MARKERS.some((marker) => combined.includes(marker))) return false;
+  // Validate that the URL is a proper absolute https URL.
+  // A bare project ref like "wdrnavabaywcfjpaqxzx" (no protocol) would fail here,
+  // causing a fast, clear error instead of hanging on a malformed network request.
+  try {
+    const url = new URL(supabaseUrl);
+    return url.protocol === 'https:' && url.hostname.length > 0;
+  } catch {
+    return false;
+  }
 };
 
 if (!isSupabaseConfigured()) {

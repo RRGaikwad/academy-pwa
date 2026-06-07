@@ -381,6 +381,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     const initAuth = async () => {
+      // Bail immediately if Supabase is not properly configured.
+      // This prevents the app from hanging on network requests to an invalid URL.
+      if (!isSupabaseConfigured()) {
+        if (isMounted) {
+          setCurrentUser(null);
+          localStorage.removeItem(STORAGE_KEYS.USER);
+          setSessionReady(true);
+          setAuthLoading(false);
+        }
+        return;
+      }
       try {
         const cachedUser = parseCachedUser();
         const cachedRole = cachedUser?.role?.toString().toLowerCase();
@@ -453,6 +464,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (!isMounted) return;
+      // While login() is actively managing the auth flow, skip listener-driven
+      // state changes to prevent race conditions and double profile syncs.
+      if (isAuthenticatingRef.current) return;
 
       if (event === 'SIGNED_IN' && session?.user) {
         await syncProfile(session.user.id, session.user.email);
@@ -510,7 +524,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setLoading(false);
       void supabase.removeChannel(channel);
     };
-  }, [currentUser?.id, refreshData]);
+    // sessionReady MUST be in deps: on refresh, currentUser?.id comes from localStorage
+    // (unchanged), so only sessionReady becoming true re-triggers the data fetch.
+    // Without it, data is never fetched after a page refresh.
+  }, [currentUser?.id, sessionReady, refreshData]);
 
   const login = useCallback(async (email: string, password: string): Promise<LoginResult> => {
     try {
@@ -519,8 +536,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const cleanPassword = password.trim();
 
       if (!isSupabaseConfigured()) {
-        return { ok: false, reason: 'Supabase not configured.' };
+        return { ok: false, reason: 'Supabase is not configured correctly. Please contact support.' };
       }
+
+      // Clear any stale local auth state before sign-in. Without this,
+      // old/expired session tokens cause signInWithPassword to first try a
+      // token refresh (a slow network round-trip) before falling through to
+      // password auth — making login feel "stuck". scope:'local' is instant.
+      try { await supabase.auth.signOut({ scope: 'local' }); } catch { /* best-effort */ }
 
       // 1. Start Auth and Profile resolution in parallel
       const authPromise = supabase.auth.signInWithPassword({ email: cleanEmail, password: cleanPassword })
