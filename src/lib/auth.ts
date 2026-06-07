@@ -450,14 +450,15 @@ export async function authenticateAdminUser(
   const isPasswordCorrect = passwordsMatch(profile.password, password);
 
   if (authError) {
-    // If Supabase Auth fails AND profiles password doesn't match, it's a wrong password
+    // If Auth fails, we MUST reject the login even if the profile password matches.
+    // An Admin without a real Supabase Auth session will be blocked by RLS from reading ANY data,
+    // causing a 'Zombie Login' where the dashboard is completely empty and data disappears on refresh.
+    console.warn('Admin Supabase Auth failed:', authError.message);
     if (!isPasswordCorrect) {
       return { ok: false, reason: 'Incorrect admin password. Please check your credentials.' };
+    } else {
+      return { ok: false, reason: 'Your admin account exists in the database but is missing from Supabase Authentication. Please register this email in the Supabase Auth users tab.' };
     }
-    
-    // If Auth fails but profiles password matches, the user exists in profiles but 
-    // maybe not in auth.users or has a different password there.
-    console.warn('Admin Supabase Auth failed, but profiles password matches:', authError.message);
   }
 
   return {
