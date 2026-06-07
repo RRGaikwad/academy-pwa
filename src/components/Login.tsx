@@ -16,7 +16,7 @@ export const Login: React.FC = () => {
     setError('');
     try {
       const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('Connection timed out. Please verify your Supabase URL.')), 10000);
+        setTimeout(() => reject(new Error('Connection timed out. Please verify your Supabase URL.')), 15000);
       });
 
       // Wrap the entire login execution in a strict 10s timeout to guarantee
