@@ -91,6 +91,7 @@ export const Login: React.FC = () => {
                   value={password}
                   onChange={e => { setPassword(e.target.value); setError(''); }}
                   placeholder="Enter your password"
+                  autoComplete="current-password"
                   className="w-full bg-white/5 border border-white/20 rounded-xl px-4 py-3 pr-12 text-white placeholder-white/30 focus:outline-none focus:border-blue-400 focus:bg-white/10 transition-all"
                   required
                 />

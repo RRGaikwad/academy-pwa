@@ -103,6 +103,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [sessionReady, setSessionReady] = useState(false);
   const syncGenerationRef = useRef(0);
   const isAuthenticatingRef = useRef(false);
+  const isSigningOutRef = useRef(false);
   const [activeTab, setActiveTab] = useState(() => {
     return localStorage.getItem(STORAGE_KEYS.ACTIVE_TAB) || 'dashboard';
   });
@@ -391,11 +392,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const cachedRole = cachedUser?.role?.toString().toLowerCase();
 
         // 1. Check Supabase session first (Single Source of Truth)
-        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+        let { data: { session }, error: sessionError } = await supabase.auth.getSession();
         
         if (sessionError) {
           console.warn('Session check error:', sessionError.message);
         }
+
+        // --- BACKUP RESTORE MECHANISM ---
+        // If supabase-js fails to persist or read the session on refresh, 
+        // we manually restore it from our robust backup.
+        if (!session && cachedRole === 'admin') {
+          try {
+            const backupStr = localStorage.getItem('vidyasphere_session_backup');
+            if (backupStr) {
+              const backupSession = JSON.parse(backupStr);
+              if (backupSession?.access_token && backupSession?.refresh_token) {
+                console.log('Restoring Supabase session from backup...');
+                const { data: restored, error: restoreErr } = await supabase.auth.setSession({
+                  access_token: backupSession.access_token,
+                  refresh_token: backupSession.refresh_token
+                });
+                if (!restoreErr && restored.session) {
+                  session = restored.session;
+                } else {
+                  console.warn('Backup session restore failed:', restoreErr?.message);
+                  localStorage.removeItem('vidyasphere_session_backup');
+                }
+              }
+            }
+          } catch (e) {
+            console.warn('Backup parse error:', e);
+          }
+        }
+        // --------------------------------
 
         if (session?.user) {
           // Valid Supabase session exists -> Sync profile and unlock
@@ -445,9 +474,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       } catch (err) {
         console.error('Auth init error:', err);
+        // Do NOT wipe localStorage here — a network error during init should not log the user out.
+        // The UI will just stay on whatever state it was in.
         if (isMounted) {
-          setCurrentUser(null);
-          localStorage.removeItem(STORAGE_KEYS.USER);
           setAuthLoading(false);
           setSessionReady(true);
         }
@@ -465,9 +494,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (event === 'SIGNED_IN' && session?.user) {
         await syncProfile(session.user.id, session.user.email);
       } else if (event === 'SIGNED_OUT') {
-        if (isMounted) {
+        // CRITICAL: Supabase fires SIGNED_OUT internally during PWA refresh when it fails
+        // to validate a token (e.g., clock skew, expired token). This is NOT a user logout.
+        // We ONLY wipe the session if the user explicitly clicked the Logout button,
+        // tracked by isSigningOutRef. Without this, the app wipes localStorage on every refresh.
+        if (isMounted && isSigningOutRef.current) {
+          isSigningOutRef.current = false;
           setCurrentUser(null);
           localStorage.removeItem(STORAGE_KEYS.USER);
+          localStorage.removeItem('vidyasphere_session_backup');
+          setAuthLoading(false);
+        } else if (isMounted) {
+          // Internal sign-out (token refresh failed). Log it but do NOT wipe the session.
+          // The backup restore mechanism in initAuth will handle reconnection on next load.
+          console.warn('[Auth] Supabase internal SIGNED_OUT event ignored — not a user action.');
           setAuthLoading(false);
         }
       }
@@ -593,6 +633,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
           setCurrentUser(sessionUser);
           localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(sessionUser));
+          if (authData.session) {
+            localStorage.setItem('vidyasphere_session_backup', JSON.stringify(authData.session));
+          }
           setSessionReady(true); 
           setAuthLoading(false);
           setActiveTab('dashboard');
@@ -691,9 +734,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         STORAGE_KEYS.USER,
         STORAGE_KEYS.ACTIVE_TAB,
         'supabase.auth.token', // Clear internal Supabase tokens just in case
+        'vidyasphere_session_backup', // Clear our manual backup too
       ];
       keysToClear.forEach(key => localStorage.removeItem(key));
       
+      // Signal the auth listener that this SIGNED_OUT is intentional.
+      // Without this flag, the onAuthStateChange SIGNED_OUT event (which also fires during
+      // token refresh failures on refresh) would incorrectly wipe localStorage.
+      isSigningOutRef.current = true;
+
       // Attempt clean Supabase sign out
       await supabase.auth.signOut();
       
