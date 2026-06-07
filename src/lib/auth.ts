@@ -430,11 +430,21 @@ export async function authenticateAdminUser(
   const cleanEmail = normalizeEmail(email);
   const cleanPassword = normalizePassword(password);
 
-  // 1. Attempt Supabase Auth login (Required for RLS to work properly)
-  const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+  const TIMEOUT_MS = 10000;
+  const timeoutReject = new Promise<never>((_, reject) => 
+    setTimeout(() => reject(new Error('Connection timed out. Please verify your Supabase URL.')), TIMEOUT_MS)
+  );
+
+  // 1. Attempt Supabase Auth login (Required for RLS to work properly) with timeout
+  const authPromise = supabase.auth.signInWithPassword({
     email: cleanEmail,
     password: cleanPassword,
   });
+
+  const { data: authData, error: authError } = await Promise.race([
+    authPromise,
+    timeoutReject
+  ]).catch(err => ({ data: { user: null, session: null }, error: err })) as any;
 
   // 2. Check if password matches profiles table (fallback/verification)
   const isPasswordCorrect = passwordsMatch(profile.password, password);

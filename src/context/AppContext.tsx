@@ -543,7 +543,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // old/expired session tokens cause signInWithPassword to first try a
       // token refresh (a slow network round-trip) before falling through to
       // password auth — making login feel "stuck". scope:'local' is instant.
-      try { await supabase.auth.signOut({ scope: 'local' }); } catch { /* best-effort */ }
+      try { supabase.auth.signOut({ scope: 'local' }); } catch { /* best-effort */ }
 
       // 1. Start Auth and Profile resolution in parallel with a 10-second timeout
       // This prevents the "Signing in..." button from spinning forever if the Supabase URL

@@ -15,12 +15,22 @@ export const Login: React.FC = () => {
     setLoading(true);
     setError('');
     try {
-      const result = await login(email, password);
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Connection timed out. Please verify your Supabase URL.')), 10000);
+      });
+
+      // Wrap the entire login execution in a strict 10s timeout to guarantee
+      // the UI spinner never gets stuck if Supabase drops packets or hangs.
+      const result = await Promise.race([
+        login(email, password),
+        timeoutPromise
+      ]) as any;
+
       if (!result.ok) {
         setError(result.reason);
       }
-    } catch {
-      setError('Login failed due to a connection or server error. Please try again.');
+    } catch (err: any) {
+      setError(err.message || 'Login failed due to a connection error. Please try again.');
     } finally {
       setLoading(false);
     }
